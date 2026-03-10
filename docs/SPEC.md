@@ -430,7 +430,7 @@ Repository must include:
 - secret-scan step in CI if practical
 
 ### 13.1 License
-Recommendation: Apache-2.0.
+Recommendation: MIT.
 
 ### 13.2 README requirements
 README must clearly state:
@@ -736,4 +736,4 @@ Suggested formula expectations:
 
 ## 24. Short build brief for Codex
 
-Build a Rust CLI named `codex-history` with `list`, `show`, `search`, `grep`, `export`, `doctor`, and `index` subcommands. Use direct local Codex history JSONL parsing as the primary source of truth. Add an opt-in SQLite FTS5 index with `index build`, `index refresh`, `index doctor`, and `index drop`. Search should use the index when present and support a `--fresh` overlay that checks for newer or changed local threads and merges those matches into the results. Package the project for release binaries that can be installed through the Homebrew tap at `github.com/nishantdesai/homebrew-tap`. Keep the repository open-source-ready from first commit with Apache-2.0 licensing, governance files, CI, synthetic fixtures only, and a clear privacy/read-only posture. App Server support, if added later, must be isolated behind a backend adapter and must not change the local-first core architecture.
+Build a Rust CLI named `codex-history` with `list`, `show`, `search`, `grep`, `export`, `doctor`, and `index` subcommands. Use direct local Codex history JSONL parsing as the primary source of truth. Add an opt-in SQLite FTS5 index with `index build`, `index refresh`, `index doctor`, and `index drop`. Search should use the index when present and support a `--fresh` overlay that checks for newer or changed local threads and merges those matches into the results. Package the project for release binaries that can be installed through the Homebrew tap at `github.com/nishantdesai/homebrew-tap`. Keep the repository open-source-ready from first commit with MIT licensing, governance files, CI, synthetic fixtures only, and a clear privacy/read-only posture. App Server support, if added later, must be isolated behind a backend adapter and must not change the local-first core architecture.

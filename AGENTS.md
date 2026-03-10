@@ -64,9 +64,13 @@ Implement in this order:
 ## Packaging rules
 
 - binary name must remain `codex-history`
+- repository license is MIT unless the user explicitly changes it
 - release artifacts must be compatible with the Homebrew tap at `github.com/nishantdesai/homebrew-tap`
+
+## Documentation rules
+
+- keep README and help text aligned with implemented behavior, not future phases
 
 ## When in doubt
 
 Do the smallest implementation that satisfies the spec and keeps the repository publishable as open source from the first commit.
-

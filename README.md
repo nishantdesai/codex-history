@@ -2,14 +2,33 @@
 
 A read-only CLI for locally accessible Codex session history, with search, export, and optional indexing.
 
-## What it does
+## Current status
 
-`codex-history` helps you:
-- list Codex threads/sessions
-- inspect thread details and turns
-- search history quickly with an opt-in local index
-- export threads in machine-friendly and human-friendly formats
-- include newer or changed threads with a freshness overlay
+Phase 0 repository bootstrap is in place.
+
+Current behavior:
+- the Rust crate builds and passes CI checks
+- `codex-history --help` works
+- the CLI parses the planned top-level commands and global flags
+- subcommands are still scaffolds and currently print `not implemented`
+
+Implemented command surface today:
+
+```bash
+codex-history --help
+codex-history list
+codex-history show <thread-id>
+codex-history search <query>
+codex-history grep <pattern>
+codex-history export <thread-id> --format markdown
+codex-history doctor
+codex-history index build
+```
+
+The parser is intentionally strict:
+- malformed command lines return errors
+- invalid flag combinations return non-zero exit codes
+- top-level help works after normal global flag orderings
 
 ## What it does not do
 
@@ -18,26 +37,26 @@ A read-only CLI for locally accessible Codex session history, with search, expor
 - sync your history anywhere
 - require Codex App Server to always be running
 
-## Current implementation approach
+## Implementation approach
 
 `codex-history` is **local-first**.
 
-The first implementation reads Codex history directly from local persisted session logs, builds optional local search/indexing on top of that, and keeps any App Server integration as possible later work behind a separate adapter.
+The intended implementation reads Codex history directly from local persisted session logs, builds optional local search/indexing on top of that, and keeps any App Server integration as possible later work behind a separate adapter.
 
 ## Backend modes
 
 Current behavior:
-- `local` — parse local Codex history directly
-- `auto` — currently behaves the same as `local`
+- `local` — accepted by the CLI
+- `auto` — accepted by the CLI and currently treated the same as `local`
 
 Possible later work:
 - `app-server` — optional adapter, not part of the initial build
 
 ## Indexing
 
-Indexing is opt-in.
+Indexing is planned and will remain opt-in.
 
-Use:
+Planned commands:
 
 ```bash
 codex-history index build
@@ -46,7 +65,7 @@ codex-history index doctor
 codex-history index drop
 ```
 
-The index uses local SQLite FTS5 for fast repeated search. When you want the newest results, use freshness overlay support:
+Later phases will add a local SQLite FTS5 index and freshness overlay support:
 
 ```bash
 codex-history search "sqlite3_open_v2" --fresh
@@ -56,10 +75,7 @@ codex-history search "sqlite3_open_v2" --fresh
 
 ### Homebrew tap
 
-```bash
-brew tap nishantdesai/tap
-brew install codex-history
-```
+Planned for a later release phase via `nishantdesai/homebrew-tap`.
 
 ### From source
 
@@ -69,12 +85,12 @@ cargo build --release
 
 ## Usage
 
+Current examples:
+
 ```bash
+codex-history --help
 codex-history list
-codex-history show <thread-id>
-codex-history grep "fatal error:"
-codex-history search "SwiftData migration"
-codex-history export <thread-id> --format markdown
+codex-history index --help
 ```
 
 ## Suggested repository docs
@@ -96,7 +112,11 @@ codex-history export <thread-id> --format markdown
 
 Early-stage OSS project.
 
-The initial release target is:
+Current phase:
+- Phase 0 repository bootstrap
+
+Next planned phases:
+- CLI skeleton behavior behind the parsed command surface
 - local backend
 - index build/search/refresh
 - export formats

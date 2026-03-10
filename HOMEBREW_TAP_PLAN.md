@@ -56,7 +56,7 @@ Suggested shape:
 - `homepage`
 - `url`
 - `sha256`
-- `license "Apache-2.0"`
+- `license "MIT"`
 - `def install`
 - `test do`
 
@@ -96,7 +96,7 @@ class CodexHistory < Formula
   homepage "https://github.com/nishantdesai/codex-history"
   url "https://github.com/nishantdesai/codex-history/releases/download/v0.1.0/codex-history-v0.1.0-aarch64-apple-darwin.tar.gz"
   sha256 "REPLACE_ME"
-  license "Apache-2.0"
+  license "MIT"
 
   def install
     bin.install "codex-history"

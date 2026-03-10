@@ -1,0 +1,9 @@
+[package]
+name = "codex-history"
+version = "0.1.0"
+edition = "2021"
+description = "A read-only CLI for locally accessible Codex session history"
+license = "MIT"
+repository = "https://github.com/nishantdesai/codex-history"
+
+[dependencies]

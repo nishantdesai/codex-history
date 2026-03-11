@@ -1,0 +1,6 @@
+{"timestamp":"2026-03-11T09:05:00Z","type":"session_meta","payload":{"id":"thr_simple","timestamp":"2026-03-11T09:05:00Z","cwd":"/workspace/sample","originator":"codex_cli_rs","source":"fixture","model_provider":"openai"}}
+{"timestamp":"2026-03-11T09:05:01Z","type":"turn_context","payload":{"cwd":"/workspace/sample","model":"gpt-5-codex"}}
+{"timestamp":"2026-03-11T09:05:02Z","type":"event_msg","payload":{"type":"user_message","message":"Run the shell tool against the help output.","images":[],"local_images":[],"text_elements":[]}}
+{"timestamp":"2026-03-11T09:05:10Z","type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":\"cargo test -- --help\",\"cwd\":\"/workspace/sample\"}","call_id":"call_simple_shell_1"}}
+{"timestamp":"2026-03-11T09:05:12Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_simple_shell_1","output":"help ok"}}
+{"timestamp":"2026-03-11T09:05:30Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Shell output captured."}}

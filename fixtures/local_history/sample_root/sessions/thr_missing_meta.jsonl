@@ -1,0 +1,5 @@
+{"timestamp":"2026-03-11T12:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn_missing_meta_1"}}
+{"timestamp":"2026-03-11T12:00:01Z","type":"turn_context","payload":{"turn_id":"turn_missing_meta_1","cwd":"/workspace/missing-meta","model":"gpt-5-codex"}}
+{"timestamp":"2026-03-11T12:00:02Z","type":"event_msg","payload":{"type":"user_message","turn_id":"turn_missing_meta_1","message":"This file is missing session metadata.","images":[],"local_images":[],"text_elements":[]}}
+this is also not valid json
+{"timestamp":"2026-03-11T12:00:30Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn_missing_meta_1","last_agent_message":"Still no session metadata here."}}

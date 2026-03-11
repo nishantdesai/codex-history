@@ -1,0 +1,12 @@
+{"timestamp":"2026-03-11T10:00:00Z","type":"session_meta","payload":{"id":"thr_command","timestamp":"2026-03-11T10:00:00Z","cwd":"/workspace/commands","originator":"codex_cli_rs","source":"fixture","model_provider":"openai"}}
+{"timestamp":"2026-03-11T10:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn_command_1"}}
+{"timestamp":"2026-03-11T10:00:01Z","type":"turn_context","payload":{"turn_id":"turn_command_1","cwd":"/workspace/commands","model":"gpt-5-codex"}}
+{"timestamp":"2026-03-11T10:00:02Z","type":"event_msg","payload":{"type":"user_message","turn_id":"turn_command_1","message":"Run grep without an index.","images":[],"local_images":[],"text_elements":[]}}
+{"timestamp":"2026-03-11T10:00:10Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"rg -n \\\"cargo test\\\" src tests\",\"cwd\":\"/workspace/commands\"}","call_id":"call_command_1"}}
+{"timestamp":"2026-03-11T10:00:12Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_command_1","output":"src/lib.rs:10:cargo test"}}
+{"timestamp":"2026-03-11T10:00:30Z","type":"event_msg","payload":{"type":"agent_reasoning","turn_id":"turn_command_1","text":"Literal grep can work directly over session logs."}}
+{"timestamp":"2026-03-11T10:05:00Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn_command_1","last_agent_message":"Literal grep can work directly over session logs."}}
+{"timestamp":"2026-03-11T10:06:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn_command_2"}}
+{"timestamp":"2026-03-11T10:06:00Z","type":"turn_context","payload":{"turn_id":"turn_command_2","cwd":"/workspace/commands","model":"gpt-5-codex"}}
+{"timestamp":"2026-03-11T10:06:30Z","type":"event_msg","payload":{"type":"agent_message","turn_id":"turn_command_2","message":"Search the transcript directly before adding an index.","phase":"commentary"}}
+{"timestamp":"2026-03-11T10:10:00Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn_command_2","last_agent_message":"Search the transcript directly before adding an index."}}

@@ -1,0 +1,8 @@
+{"timestamp":"2026-03-11T13:00:00Z","type":"session_meta","payload":{"id":"thr_response_item","timestamp":"2026-03-11T13:00:00Z","cwd":"/workspace/response","originator":"codex_cli_rs","source":"fixture","model_provider":"openai"}}
+{"timestamp":"2026-03-11T13:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn_response_item_1"}}
+{"timestamp":"2026-03-11T13:00:01Z","type":"turn_context","payload":{"turn_id":"turn_response_item_1","cwd":"/workspace/response","model":"gpt-5-codex"}}
+{"timestamp":"2026-03-11T13:00:02Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"Repository policy goes here."}]}}
+{"timestamp":"2026-03-11T13:00:03Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Summarize the parser edge cases."}]}}
+{"timestamp":"2026-03-11T13:00:04Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I found two parser regressions."}],"phase":"commentary"}}
+{"timestamp":"2026-03-11T13:00:05Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"Planning parser follow-up"}],"content":null,"encrypted_content":"redacted"}}
+{"timestamp":"2026-03-11T13:00:06Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn_response_item_1","last_agent_message":"I found two parser regressions."}}

@@ -1,0 +1,8 @@
+{"timestamp":"2026-03-11T11:00:00Z","type":"session_meta","payload":{"id":"thr_malformed","timestamp":"2026-03-11T11:00:00Z","cwd":"/workspace/malformed","originator":"codex_cli_rs","source":"fixture","model_provider":"openai"}}
+{"timestamp":"2026-03-11T11:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn_malformed_1"}}
+{"timestamp":"2026-03-11T11:00:01Z","type":"turn_context","payload":{"turn_id":"turn_malformed_1","cwd":"/workspace/malformed","model":"gpt-5-codex"}}
+{"timestamp":"2026-03-11T11:00:02Z","type":"event_msg","payload":{"type":"user_message","turn_id":"turn_malformed_1","message":"Do not crash on malformed JSONL.","images":[],"local_images":[],"text_elements":[]}}
+this is not valid json
+{"timestamp":"2026-03-11T11:00:30Z","type":"response_item","payload":{"type":"future_tool_result","text":"unknown item payload","nested":{"ok":true}}}
+{"timestamp":"2026-03-11T11:00:45Z","type":"event_msg","payload":{"type":"custom_event","turn_id":"turn_malformed_1","note":"unknown event preserved where practical"}}
+{"timestamp":"2026-03-11T11:03:00Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn_malformed_1","last_agent_message":"Malformed lines were tolerated."}}

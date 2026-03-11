@@ -1,0 +1,4 @@
+{"timestamp":"2026-03-11T14:01:00Z","type":"session_meta","payload":{"id":"thr_cross_shard","timestamp":"2026-03-11T14:01:00Z","cwd":"/workspace/cross","originator":"codex_cli_rs","source":"fixture","model_provider":"openai"}}
+{"timestamp":"2026-03-11T14:01:01Z","type":"turn_context","payload":{"turn_id":"turn_cross_shard_1","cwd":"/workspace/cross","model":"gpt-5-codex"}}
+{"timestamp":"2026-03-11T14:01:02Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_cross_shard_1","output":"tests ok"}}
+{"timestamp":"2026-03-11T14:01:03Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn_cross_shard_1","last_agent_message":"Parser tests passed."}}

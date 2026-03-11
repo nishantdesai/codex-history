@@ -1,14 +1,15 @@
-mod cli;
-
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    match cli::Cli::parse(std::env::args().skip(1)) {
-        Ok(cli::ParseOutcome::Run(cli)) => {
-            cli.run();
-            ExitCode::SUCCESS
-        }
-        Ok(cli::ParseOutcome::PrintHelp(text)) => {
+    match codex_history::cli::Cli::parse(std::env::args().skip(1)) {
+        Ok(codex_history::cli::ParseOutcome::Run(cli)) => match cli.run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(message) => {
+                eprintln!("error: {message}");
+                ExitCode::from(1)
+            }
+        },
+        Ok(codex_history::cli::ParseOutcome::PrintHelp(text)) => {
             println!("{text}");
             ExitCode::SUCCESS
         }

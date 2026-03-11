@@ -6,5 +6,6 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - Repository bootstrap files and CI.
-- Initial CLI entrypoint and strict parser scaffolding.
+- Finalized Phase 1 CLI skeleton with scaffolded subcommands and strict parsing.
+- Command-specific help output and parser/help regression coverage.
 - Tracked placeholder fixtures directory for synthetic test data.

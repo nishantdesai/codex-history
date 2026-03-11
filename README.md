@@ -4,12 +4,13 @@ A read-only CLI for locally accessible Codex session history, with search, expor
 
 ## Current status
 
-Phase 0 repository bootstrap is in place.
+Phase 1 CLI skeleton is in place.
 
 Current behavior:
 - the Rust crate builds and passes CI checks
 - `codex-history --help` works
-- the CLI parses the planned top-level commands and global flags
+- the CLI parses the planned top-level commands, command flags, and global flags
+- command-specific help is available with `codex-history <command> --help`
 - subcommands are still scaffolds and currently print `not implemented`
 
 Implemented command surface today:
@@ -18,17 +19,22 @@ Implemented command surface today:
 codex-history --help
 codex-history list
 codex-history show <thread-id>
+codex-history show --include-turns <thread-id>
 codex-history search <query>
+codex-history search --fresh <query>
 codex-history grep <pattern>
+codex-history grep --regex <pattern>
 codex-history export <thread-id> --format markdown
 codex-history doctor
 codex-history index build
+codex-history index drop --yes
 ```
 
 The parser is intentionally strict:
 - malformed command lines return errors
 - invalid flag combinations return non-zero exit codes
 - top-level help works after normal global flag orderings
+- command help goes to stdout and invalid usage goes to stderr
 
 ## What it does not do
 
@@ -65,7 +71,7 @@ codex-history index doctor
 codex-history index drop
 ```
 
-Later phases will add a local SQLite FTS5 index and freshness overlay support:
+Later phases will add a local SQLite FTS5 index implementation and freshness overlay behavior:
 
 ```bash
 codex-history search "sqlite3_open_v2" --fresh
@@ -89,8 +95,9 @@ Current examples:
 
 ```bash
 codex-history --help
-codex-history list
-codex-history index --help
+codex-history show --help
+codex-history search --fresh "sqlite3_open_v2"
+codex-history index drop --help
 ```
 
 ## Suggested repository docs
@@ -113,10 +120,9 @@ codex-history index --help
 Early-stage OSS project.
 
 Current phase:
-- Phase 0 repository bootstrap
+- Phase 1 CLI skeleton
 
 Next planned phases:
-- CLI skeleton behavior behind the parsed command surface
 - local backend
 - index build/search/refresh
 - export formats

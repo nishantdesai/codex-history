@@ -34,7 +34,7 @@ fn command_help_goes_to_stdout_after_global_flags() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("codex-history search"));
-    assert!(stdout.contains("--fresh"));
+    assert!(stdout.contains("search <query>"));
     assert!(output.stderr.is_empty());
 }
 

@@ -1,6 +1,10 @@
 use serde::Serialize;
 
 use crate::backend::local::{GrepMatch, LocalBackend, LocalDoctorReport};
+use crate::index::ingest::{build_local_index, IndexBuildReport};
+use crate::index::manifest::default_index_path;
+use crate::index::query::{search_index, SearchResult};
+use crate::index::schema::{doctor as doctor_index, IndexDoctorReport};
 use crate::model::{Item, ThreadDetail, ThreadSummary};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,8 +173,15 @@ impl Cli {
                 })
             }
             Commands::Search { .. } => {
-                println!("search: not implemented");
-                Ok(())
+                let Commands::Search { query, fresh } = &self.command else {
+                    unreachable!("matched command variant");
+                };
+                if *fresh {
+                    return Err("search --fresh is not implemented yet".into());
+                }
+                let path = default_index_path();
+                let results = search_index(&path, query, 50)?;
+                render_collection(&self.global, &results, render_search_result)
             }
             Commands::Grep { pattern, regex } => {
                 let matches = backend.grep(pattern, *regex)?;
@@ -184,15 +195,18 @@ impl Cli {
                 let report = backend.doctor()?;
                 render_single(&self.global, &report, render_doctor_report)
             }
-            Commands::Index(index_command) => {
-                match index_command {
-                    IndexCommands::Build => println!("index build: not implemented"),
-                    IndexCommands::Refresh => println!("index refresh: not implemented"),
-                    IndexCommands::Doctor => println!("index doctor: not implemented"),
-                    IndexCommands::Drop { .. } => println!("index drop: not implemented"),
+            Commands::Index(index_command) => match index_command {
+                IndexCommands::Build => {
+                    let report = build_local_index(&backend, &default_index_path())?;
+                    render_single(&self.global, &report, render_index_build_report)
                 }
-                Ok(())
-            }
+                IndexCommands::Refresh => Err("index refresh is not implemented yet".into()),
+                IndexCommands::Doctor => {
+                    let report = doctor_index(&default_index_path())?;
+                    render_single(&self.global, &report, render_index_doctor_report)
+                }
+                IndexCommands::Drop { .. } => Err("index drop is not implemented yet".into()),
+            },
         }
     }
 
@@ -568,7 +582,7 @@ fn show_help() -> String {
 }
 
 fn search_help() -> String {
-    "codex-history search\nSearch across history\n\nUSAGE:\n  codex-history [OPTIONS] search [--fresh] <query>\n\nOPTIONS:\n  --fresh\n  -h, --help"
+    "codex-history search\nSearch across the local index\n\nUSAGE:\n  codex-history [OPTIONS] search <query>\n\nOPTIONS:\n  -h, --help"
         .to_string()
 }
 
@@ -767,6 +781,59 @@ fn render_doctor_report(report: &LocalDoctorReport) -> String {
 
     for warning in &report.warnings {
         lines.push(format!("warning: {warning}"));
+    }
+
+    lines.join("\n")
+}
+
+fn render_search_result(entry: &SearchResult) -> String {
+    let turn = entry.turn_id.as_deref().unwrap_or("-");
+    format!(
+        "{}\t{}\t{}\t{:.2}\t{}",
+        entry.thread_id, turn, entry.kind, entry.score, entry.text
+    )
+}
+
+fn render_index_build_report(report: &IndexBuildReport) -> String {
+    [
+        format!("path: {}", report.path.display()),
+        format!("schema_version: {}", report.schema_version),
+        format!("source_backend: {}", report.source_backend),
+        format!("built_at: {}", report.built_at),
+        format!("threads: {}", report.threads),
+        format!("turns: {}", report.turns),
+        format!("items: {}", report.items),
+        format!("search_docs: {}", report.search_docs),
+        format!("thread_manifest: {}", report.manifest_rows),
+    ]
+    .join("\n")
+}
+
+fn render_index_doctor_report(report: &IndexDoctorReport) -> String {
+    let mut lines = vec![
+        format!("path: {}", report.path.display()),
+        format!("exists: {}", report.exists),
+        format!("healthy: {}", report.healthy),
+        format!(
+            "schema_version: {}",
+            report
+                .schema_version
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "(missing)".into())
+        ),
+        format!(
+            "schema_version_expected: {}",
+            report.schema_version_expected
+        ),
+        format!("threads: {}", report.threads),
+        format!("turns: {}", report.turns),
+        format!("items: {}", report.items),
+        format!("search_docs: {}", report.search_docs),
+        format!("thread_manifest: {}", report.thread_manifest),
+    ];
+
+    for issue in &report.issues {
+        lines.push(format!("issue: {issue}"));
     }
 
     lines.join("\n")

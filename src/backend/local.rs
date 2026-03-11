@@ -77,6 +77,14 @@ impl LocalBackend {
         Ok(thread)
     }
 
+    pub fn list_thread_details(&self) -> Result<Vec<ThreadDetail>, String> {
+        let mut threads = self.scan_threads()?.threads;
+        threads.sort_by(|left, right| {
+            thread_sort_key(&right.summary).cmp(&thread_sort_key(&left.summary))
+        });
+        Ok(threads)
+    }
+
     pub fn grep(&self, pattern: &str, regex: bool) -> Result<Vec<GrepMatch>, String> {
         let matcher = if regex {
             Some(

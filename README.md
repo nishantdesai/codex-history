@@ -4,14 +4,16 @@ A read-only CLI for locally accessible Codex session history, with search, expor
 
 ## Current status
 
-Phase 1 CLI skeleton is in place.
+Phase 4 search index foundation is in place.
 
 Current behavior:
 - the Rust crate builds and passes CI checks
 - `codex-history --help` works
-- the CLI parses the planned top-level commands, command flags, and global flags
+- the CLI supports local-history `list`, `show`, `grep`, and `doctor`
+- `index build` creates an opt-in local SQLite FTS index from local session history
+- `index doctor` reports index presence, schema version, and core row counts
+- `search <query>` reads ranked results from the local index
 - command-specific help is available with `codex-history <command> --help`
-- subcommands are still scaffolds and currently print `not implemented`
 
 Implemented command surface today:
 
@@ -21,13 +23,11 @@ codex-history list
 codex-history show <thread-id>
 codex-history show --include-turns <thread-id>
 codex-history search <query>
-codex-history search --fresh <query>
 codex-history grep <pattern>
 codex-history grep --regex <pattern>
-codex-history export <thread-id> --format markdown
 codex-history doctor
 codex-history index build
-codex-history index drop --yes
+codex-history index doctor
 ```
 
 The parser is intentionally strict:
@@ -60,21 +60,20 @@ Possible later work:
 
 ## Indexing
 
-Indexing is planned and will remain opt-in.
+Indexing is implemented and remains opt-in.
 
-Planned commands:
+Current commands:
 
 ```bash
 codex-history index build
-codex-history index refresh
 codex-history index doctor
-codex-history index drop
 ```
 
-Later phases will add a local SQLite FTS5 index implementation and freshness overlay behavior:
+Later phases will add refresh and freshness-overlay behavior:
 
 ```bash
 codex-history search "sqlite3_open_v2" --fresh
+codex-history index refresh
 ```
 
 ## Installation
@@ -96,8 +95,8 @@ Current examples:
 ```bash
 codex-history --help
 codex-history show --help
-codex-history search --fresh "sqlite3_open_v2"
-codex-history index drop --help
+codex-history index build
+codex-history search "sqlite3_open_v2"
 ```
 
 ## Suggested repository docs
@@ -120,11 +119,10 @@ codex-history index drop --help
 Early-stage OSS project.
 
 Current phase:
-- Phase 1 CLI skeleton
+- Phase 4 search index foundation
 
 Next planned phases:
-- local backend
-- index build/search/refresh
+- refresh logic
 - export formats
 - Homebrew-tap-ready release packaging
 

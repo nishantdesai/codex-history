@@ -4,15 +4,17 @@ A read-only CLI for locally accessible Codex session history, with search, expor
 
 ## Current status
 
-Phase 4 search index foundation is in place.
+Phase 5 refresh and freshness overlay are in place.
 
 Current behavior:
 - the Rust crate builds and passes CI checks
 - `codex-history --help` works
 - the CLI supports local-history `list`, `show`, `grep`, and `doctor`
 - `index build` creates an opt-in local SQLite FTS index from local session history
+- `index refresh` upserts only new or changed threads using manifest tracking
 - `index doctor` reports index presence, schema version, and core row counts
 - `search <query>` reads ranked results from the local index
+- `search --fresh <query>` overlays newer or changed local threads on top of the index
 - command-specific help is available with `codex-history <command> --help`
 
 Implemented command surface today:
@@ -23,10 +25,12 @@ codex-history list
 codex-history show <thread-id>
 codex-history show --include-turns <thread-id>
 codex-history search <query>
+codex-history search --fresh <query>
 codex-history grep <pattern>
 codex-history grep --regex <pattern>
 codex-history doctor
 codex-history index build
+codex-history index refresh
 codex-history index doctor
 ```
 
@@ -66,14 +70,14 @@ Current commands:
 
 ```bash
 codex-history index build
+codex-history index refresh
 codex-history index doctor
 ```
 
-Later phases will add refresh and freshness-overlay behavior:
+Later phases will extend indexing with exporter support and packaging:
 
 ```bash
-codex-history search "sqlite3_open_v2" --fresh
-codex-history index refresh
+codex-history export thr_123 --format markdown
 ```
 
 ## Installation
@@ -97,6 +101,7 @@ codex-history --help
 codex-history show --help
 codex-history index build
 codex-history search "sqlite3_open_v2"
+codex-history search --fresh "sqlite3_open_v2"
 ```
 
 ## Suggested repository docs
@@ -119,10 +124,9 @@ codex-history search "sqlite3_open_v2"
 Early-stage OSS project.
 
 Current phase:
-- Phase 4 search index foundation
+- Phase 5 refresh and freshness overlay
 
 Next planned phases:
-- refresh logic
 - export formats
 - Homebrew-tap-ready release packaging
 

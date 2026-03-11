@@ -1,9 +1,12 @@
 use serde::Serialize;
 
 use crate::backend::local::{GrepMatch, LocalBackend, LocalDoctorReport};
-use crate::index::ingest::{build_local_index, IndexBuildReport};
+use crate::index::ingest::{
+    build_local_index, load_manifest_snapshot, refresh_local_index, IndexBuildReport,
+    IndexRefreshReport,
+};
 use crate::index::manifest::default_index_path;
-use crate::index::query::{search_index, SearchResult};
+use crate::index::query::{search_index, search_with_fresh_overlay, SearchResult};
 use crate::index::schema::{doctor as doctor_index, IndexDoctorReport};
 use crate::model::{Item, ThreadDetail, ThreadSummary};
 
@@ -176,11 +179,14 @@ impl Cli {
                 let Commands::Search { query, fresh } = &self.command else {
                     unreachable!("matched command variant");
                 };
-                if *fresh {
-                    return Err("search --fresh is not implemented yet".into());
-                }
                 let path = default_index_path();
-                let results = search_index(&path, query, 50)?;
+                let results = if *fresh {
+                    let manifest = load_manifest_snapshot(&path)?;
+                    let details = backend.list_thread_details()?;
+                    search_with_fresh_overlay(&path, query, 50, &details, &manifest)?
+                } else {
+                    search_index(&path, query, 50)?
+                };
                 render_collection(&self.global, &results, render_search_result)
             }
             Commands::Grep { pattern, regex } => {
@@ -200,7 +206,10 @@ impl Cli {
                     let report = build_local_index(&backend, &default_index_path())?;
                     render_single(&self.global, &report, render_index_build_report)
                 }
-                IndexCommands::Refresh => Err("index refresh is not implemented yet".into()),
+                IndexCommands::Refresh => {
+                    let report = refresh_local_index(&backend, &default_index_path())?;
+                    render_single(&self.global, &report, render_index_refresh_report)
+                }
                 IndexCommands::Doctor => {
                     let report = doctor_index(&default_index_path())?;
                     render_single(&self.global, &report, render_index_doctor_report)
@@ -582,7 +591,7 @@ fn show_help() -> String {
 }
 
 fn search_help() -> String {
-    "codex-history search\nSearch across the local index\n\nUSAGE:\n  codex-history [OPTIONS] search <query>\n\nOPTIONS:\n  -h, --help"
+    "codex-history search\nSearch across history\n\nUSAGE:\n  codex-history [OPTIONS] search [--fresh] <query>\n\nOPTIONS:\n  --fresh\n  -h, --help"
         .to_string()
 }
 
@@ -837,6 +846,25 @@ fn render_index_doctor_report(report: &IndexDoctorReport) -> String {
     }
 
     lines.join("\n")
+}
+
+fn render_index_refresh_report(report: &IndexRefreshReport) -> String {
+    [
+        format!("path: {}", report.path.display()),
+        format!("schema_version: {}", report.schema_version),
+        format!("source_backend: {}", report.source_backend),
+        format!("refreshed_at: {}", report.refreshed_at),
+        format!("new_threads: {}", report.new_threads),
+        format!("changed_threads: {}", report.changed_threads),
+        format!("unchanged_threads: {}", report.unchanged_threads),
+        format!("indexed_threads: {}", report.indexed_threads),
+        format!("manifest_rows: {}", report.manifest_rows),
+        format!(
+            "watermark: {}",
+            report.watermark.as_deref().unwrap_or("(none)")
+        ),
+    ]
+    .join("\n")
 }
 
 #[cfg(test)]

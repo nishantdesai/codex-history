@@ -774,7 +774,7 @@ fn attach_legacy_unknown_event(event_type: &str, value: Value, state: &mut Parse
     let Some(turn_id) = object
         .get("turn_id")
         .and_then(Value::as_str)
-        .or_else(|| state.current_turn_id.as_deref())
+        .or(state.current_turn_id.as_deref())
         .map(str::to_string)
     else {
         return false;

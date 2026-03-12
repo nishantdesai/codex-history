@@ -8,10 +8,7 @@
 
 ## Quick Start
 
-Homebrew support is being prepared through the separate `nishantdesai/homebrew-tap` repository.
-Because this main repository is still private, the tap is scaffolded but not yet installable from a public release.
-
-When the first public release is published, users will be able to install directly with:
+Install directly via Homebrew:
 
 ```bash
 brew install nishantdesai/tap/codex-history

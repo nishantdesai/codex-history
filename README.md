@@ -17,11 +17,13 @@ When the first public release is published, users will be able to install direct
 brew install nishantdesai/tap/codex-history
 ```
 
-From source today:
+After install, a good first flow is:
 
 ```bash
-cargo build --release
-./target/release/codex-history --help
+codex-history index build
+codex-history search "deadlock"
+codex-history grep --compact "leftover argv"
+codex-history --json show --include-turns <thread-id>
 ```
 
 ## What It Does
@@ -32,33 +34,6 @@ cargo build --release
 - supports ranked indexed search with `search`
 - exports threads as JSON, Markdown, or prompt-pack handoff format
 - redacts obvious secrets in human-readable output and keeps JSON output structurally valid
-
-## Command Surface
-
-```bash
-codex-history --help
-codex-history --version
-codex-history list
-codex-history show <thread-id>
-codex-history show --include-turns <thread-id>
-codex-history search <query>
-codex-history search --fresh <query>
-codex-history search --include-thinking <query>
-codex-history search --include-tools <query>
-codex-history search --compact <query>
-codex-history grep <pattern>
-codex-history grep --regex <pattern>
-codex-history grep --include-thinking <pattern>
-codex-history grep --include-tools <pattern>
-codex-history grep --compact <pattern>
-codex-history export <thread-id> --format json
-codex-history export <thread-id> --format markdown
-codex-history export <thread-id> --format prompt-pack
-codex-history doctor
-codex-history index build
-codex-history index refresh
-codex-history index doctor
-```
 
 ## Search Modes
 
@@ -88,21 +63,50 @@ Thread display names come from parsed session metadata when present, and may als
 codex-history search "sqlite3_open_v2"
 codex-history search --fresh "deadlock"
 codex-history search --include-tools "cargo test"
+codex-history --json search "deadlock"
 codex-history search --compact "deadlock"
 
 codex-history grep "leftover argv"
 codex-history grep --include-thinking "planner"
+codex-history --ndjson grep "deadlock"
 codex-history grep --compact "deadlock"
 
 codex-history export thr_123 --format markdown
 codex-history show --include-turns thr_123
 ```
 
+## Command Surface
+
+```bash
+codex-history --help
+codex-history --version
+codex-history list
+codex-history show <thread-id>
+codex-history show --include-turns <thread-id>
+codex-history search <query>
+codex-history search --fresh <query>
+codex-history search --include-thinking <query>
+codex-history search --include-tools <query>
+codex-history search --compact <query>
+codex-history grep <pattern>
+codex-history grep --regex <pattern>
+codex-history grep --include-thinking <pattern>
+codex-history grep --include-tools <pattern>
+codex-history grep --compact <pattern>
+codex-history export <thread-id> --format json
+codex-history export <thread-id> --format markdown
+codex-history export <thread-id> --format prompt-pack
+codex-history doctor
+codex-history index build
+codex-history index refresh
+codex-history index doctor
+```
+
 ## Packaging And Releases
 
-Phase 8 packaging and release preparation is in progress in the main repository.
+This repository includes release packaging for GitHub Releases and Homebrew tap consumption.
 
-Implemented release-prep pieces:
+Included release pieces:
 
 - stable `codex-history --version` output
 - native release archive packaging script
@@ -119,12 +123,19 @@ make release-checksums
 
 See [docs/RELEASING.md](docs/RELEASING.md) for archive layout, local validation, and the handoff flow to `nishantdesai/homebrew-tap`.
 
+## Building From Source
+
+```bash
+cargo build --release
+./target/release/codex-history --help
+```
+
 ## Current Status
 
 - local-first backend is implemented
 - export formats are implemented
 - privacy and redaction are implemented
-- packaging and release preparation is underway
+- release packaging is implemented
 - App Server support is still deferred
 
 ## Privacy Posture

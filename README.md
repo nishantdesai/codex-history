@@ -4,7 +4,7 @@ A read-only CLI for locally accessible Codex session history, with search, expor
 
 ## Current status
 
-Phase 6 export formats are in place.
+Phase 7 privacy and redaction is in place.
 
 Current behavior:
 - the Rust crate builds and passes CI checks
@@ -18,7 +18,8 @@ Current behavior:
 - `grep` and `search` search only user and assistant message content by default
 - `grep --include-thinking` and `search --include-thinking` opt into reasoning content
 - `grep --include-tools` and `search --include-tools` opt into command/tool content
-- default human-readable `grep` and `search` output is grouped by thread, shows `thread_id`, prefers a thread name when available, and otherwise falls back to the first user prompt
+- default human-readable `grep` and `search` output is grouped by thread, shows `thread_id`, prefers a thread name when available, otherwise falls back to the first user prompt, and then renders each matched hit as a compact header plus full text
+- `grep --compact` and `search --compact` print markdown-table-style rows for quick scanning without truncating thread name, cwd, or preview text
 - `export <thread-id> --format <json|markdown|prompt-pack>` renders canonical thread detail in three deterministic export formats
 - command-specific help is available with `codex-history <command> --help`
 
@@ -33,10 +34,12 @@ codex-history search <query>
 codex-history search --fresh <query>
 codex-history search --include-thinking <query>
 codex-history search --include-tools <query>
+codex-history search --compact <query>
 codex-history grep <pattern>
 codex-history grep --regex <pattern>
 codex-history grep --include-thinking <pattern>
 codex-history grep --include-tools <pattern>
+codex-history grep --compact <pattern>
 codex-history export <thread-id> --format json
 codex-history export <thread-id> --format markdown
 codex-history export <thread-id> --format prompt-pack
@@ -121,8 +124,10 @@ codex-history index build
 codex-history search "sqlite3_open_v2"
 codex-history search --fresh "sqlite3_open_v2"
 codex-history search --include-tools "cargo test"
+codex-history search --compact "deadlock"
 codex-history grep "leftover argv"
 codex-history grep --include-thinking "planner"
+codex-history grep --compact "deadlock"
 ```
 
 Human-readable `grep` and `search` results are grouped by thread and show:
@@ -131,8 +136,16 @@ Human-readable `grep` and `search` results are grouped by thread and show:
 - `first prompt` when no thread name is available
 - `cwd`
 - hit and occurrence counts
-- matched content source, such as `user` or `assistant`
-- a compact preview snippet
+- grouped matched content sources, such as `user` or `assistant`
+- per-hit header records with source, turn, and `hit_id`
+- full matched text blocks under each hit
+
+Compact mode prints one markdown-table row per hit with:
+- source
+- thread ID
+- thread name or first prompt
+- cwd
+- a single-line preview with compacted whitespace but no deliberate truncation
 
 Thread names come from parsed session metadata when present, and may also be filled from `~/.codex/session_index.jsonl` for display.
 
@@ -158,10 +171,9 @@ Thread names come from parsed session metadata when present, and may also be fil
 Early-stage OSS project.
 
 Current phase:
-- Phase 6 export formats
+- Phase 7 privacy and redaction
 
 Next planned phases:
-- privacy and redaction
 - Homebrew-tap-ready release packaging
 
 App Server support is deferred for later.

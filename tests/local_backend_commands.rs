@@ -180,8 +180,22 @@ fn grep_human_output_groups_matches_by_thread() {
     assert!(stdout.contains("hits: 1"));
     assert!(stdout.contains("occurrences: 2"));
     assert!(stdout.contains("matched in: assistant"));
-    assert!(stdout.contains("preview: I found the leftover argv issue."));
+    assert!(stdout.contains(
+        "assistant | turn: turn_simple_1 | hit_id: thr_simple:turn_simple_1:agent_message:1"
+    ));
+    assert!(stdout.contains("I found the leftover argv issue."));
     assert!(!stdout.contains('\t'));
+}
+
+#[test]
+fn grep_compact_output_prints_one_line_per_hit() {
+    let output = run(&["grep", "--compact", "leftover argv"]);
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    assert!(stdout.contains("| SOURCE | THREAD_ID | THREAD_NAME | CWD | PREVIEW |"));
+    assert!(stdout.contains("| --- | --- | --- | --- | --- |"));
+    assert!(stdout.contains("| assistant | thr_simple | Please inspect the parser regression. | /workspace/sample | I found the leftover argv issue. |"));
 }
 
 #[test]
@@ -325,9 +339,29 @@ fn search_human_output_groups_matches_by_thread() {
     assert!(stdout.contains("occurrences: 2"));
     assert!(stdout.contains("matched in: assistant"));
     assert!(stdout.contains("best score:"));
-    assert!(stdout.contains("preview:"));
+    assert!(stdout.contains(
+        "assistant | turn: turn_simple_1 | hit_id: thr_simple:turn_simple_1:agent_message:1"
+    ));
     assert!(stdout.contains("leftover argv"));
     assert!(!stdout.contains('\t'));
+
+    std::fs::remove_dir_all(home).expect("cleanup temp home");
+}
+
+#[test]
+fn search_compact_output_prints_one_line_per_hit() {
+    let home = temp_home("search-compact");
+
+    let build_output = run_with_home(&["--json", "index", "build"], &home);
+    assert!(build_output.status.success());
+
+    let output = run_with_home(&["search", "--compact", "leftover argv"], &home);
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    assert!(stdout.contains("| SOURCE | THREAD_ID | THREAD_NAME | CWD | PREVIEW |"));
+    assert!(stdout.contains("| --- | --- | --- | --- | --- |"));
+    assert!(stdout.contains("| assistant | thr_simple | Please inspect the parser regression. | /workspace/sample | I found the leftover argv issue. |"));
 
     std::fs::remove_dir_all(home).expect("cleanup temp home");
 }

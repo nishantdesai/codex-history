@@ -204,7 +204,7 @@ fn execute_search(
                     thread_id: row.get(0)?,
                     turn_id: row.get(1)?,
                     kind: row.get(2)?,
-                    text: excerpt_text(&row.get::<_, String>(3)?),
+                    text: row.get(3)?,
                     updated_at: row.get(4)?,
                     cwd: row.get(5)?,
                     score: heuristic_rank - fts_rank,
@@ -296,7 +296,7 @@ fn search_local_details(
                 thread_id: doc.thread_id.clone(),
                 turn_id: doc.turn_id.clone(),
                 kind: doc.kind.clone(),
-                text: excerpt_text(&doc.text),
+                text: doc.text.clone(),
                 score: if phrase_match { 1000.0 } else { 0.0 } + kind_boost + token_hits,
                 updated_at: doc.updated_at.clone(),
                 cwd: doc.cwd.clone(),
@@ -385,16 +385,6 @@ fn contains_token_sequence(haystack: &[String], needle: &[String]) -> bool {
         && haystack
             .windows(needle.len())
             .any(|window| window == needle)
-}
-
-fn excerpt_text(text: &str) -> String {
-    const LIMIT: usize = 240;
-    if text.chars().count() <= LIMIT {
-        return text.to_string();
-    }
-
-    let excerpt: String = text.chars().take(LIMIT).collect();
-    format!("{excerpt}...")
 }
 
 #[cfg(test)]

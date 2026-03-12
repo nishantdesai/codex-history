@@ -60,6 +60,9 @@ Implement in this order:
 - stderr for diagnostics and errors
 - never mix prose into `--json` output
 - make `--help` text concise and accurate
+- keep `--json` and `--ndjson` as the machine-facing interfaces for search/grep
+- keep human-readable `search`/`grep` output aligned with the implemented modes:
+  default output is grouped by thread with per-hit full text blocks, and `--compact` is a markdown-table-style one-line view that should not deliberately truncate thread name, cwd, or preview text
 
 ## Packaging rules
 

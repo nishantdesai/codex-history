@@ -69,12 +69,14 @@ pub enum Commands {
         fresh: bool,
         include_thinking: bool,
         include_tools: bool,
+        compact: bool,
     },
     Grep {
         pattern: String,
         regex: bool,
         include_thinking: bool,
         include_tools: bool,
+        compact: bool,
     },
     Export {
         thread_id: String,
@@ -197,6 +199,7 @@ impl Cli {
                     fresh,
                     include_thinking,
                     include_tools,
+                    compact,
                 } = &self.command
                 else {
                     unreachable!("matched command variant");
@@ -222,7 +225,7 @@ impl Cli {
                 if self.global.json || self.global.ndjson {
                     render_collection(&self.global, &results, render_search_result)
                 } else {
-                    render_search_results_human(&results, query, &thread_info)
+                    render_search_results_human(&results, query, &thread_info, *compact)
                 }
             }
             Commands::Grep {
@@ -230,6 +233,7 @@ impl Cli {
                 regex,
                 include_thinking,
                 include_tools,
+                compact,
             } => {
                 let scope = SearchScope {
                     include_thinking: *include_thinking,
@@ -239,7 +243,7 @@ impl Cli {
                 if self.global.json || self.global.ndjson {
                     render_collection(&self.global, &report.matches, render_grep_match)
                 } else {
-                    render_grep_matches_human(&report, pattern, *regex)
+                    render_grep_matches_human(&report, pattern, *regex, *compact)
                 }
             }
             Commands::Export { thread_id, format } => {
@@ -377,6 +381,7 @@ fn parse_search(args: &[String]) -> Result<ParsedCommandOutcome, String> {
     let mut fresh = false;
     let mut include_thinking = false;
     let mut include_tools = false;
+    let mut compact = false;
     let mut end_of_options = false;
 
     for (index, arg) in args[1..].iter().enumerate() {
@@ -394,6 +399,7 @@ fn parse_search(args: &[String]) -> Result<ParsedCommandOutcome, String> {
                 include_thinking = set_flag(include_thinking, "--include-thinking")?
             }
             "--include-tools" => include_tools = set_flag(include_tools, "--include-tools")?,
+            "--compact" => compact = set_flag(compact, "--compact")?,
             "--" => end_of_options = true,
             arg if arg.starts_with('-') && query.is_none() && index + 2 == args.len() => {
                 query = Some(arg.to_string())
@@ -410,6 +416,7 @@ fn parse_search(args: &[String]) -> Result<ParsedCommandOutcome, String> {
             fresh,
             include_thinking,
             include_tools,
+            compact,
         },
         consumed: args.len(),
     }))
@@ -424,6 +431,7 @@ fn parse_grep(args: &[String]) -> Result<ParsedCommandOutcome, String> {
     let mut regex = false;
     let mut include_thinking = false;
     let mut include_tools = false;
+    let mut compact = false;
     let mut end_of_options = false;
 
     for (index, arg) in args[1..].iter().enumerate() {
@@ -441,6 +449,7 @@ fn parse_grep(args: &[String]) -> Result<ParsedCommandOutcome, String> {
                 include_thinking = set_flag(include_thinking, "--include-thinking")?
             }
             "--include-tools" => include_tools = set_flag(include_tools, "--include-tools")?,
+            "--compact" => compact = set_flag(compact, "--compact")?,
             "--" => end_of_options = true,
             arg if arg.starts_with('-') && pattern.is_none() && index + 2 == args.len() => {
                 pattern = Some(arg.to_string())
@@ -458,6 +467,7 @@ fn parse_grep(args: &[String]) -> Result<ParsedCommandOutcome, String> {
             regex,
             include_thinking,
             include_tools,
+            compact,
         },
         consumed: args.len(),
     }))
@@ -653,12 +663,12 @@ fn show_help() -> String {
 }
 
 fn search_help() -> String {
-    "codex-history search\nSearch across history\n\nUSAGE:\n  codex-history [OPTIONS] search [--fresh] [--include-thinking] [--include-tools] <query>\n\nOPTIONS:\n  --fresh\n  --include-thinking\n  --include-tools\n  -h, --help"
+    "codex-history search\nSearch across history\n\nUSAGE:\n  codex-history [OPTIONS] search [--fresh] [--include-thinking] [--include-tools] [--compact] <query>\n\nOPTIONS:\n  --fresh\n  --include-thinking\n  --include-tools\n  --compact\n  -h, --help"
         .to_string()
 }
 
 fn grep_help() -> String {
-    "codex-history grep\nLiteral or regex transcript search without ranking\n\nUSAGE:\n  codex-history [OPTIONS] grep [--regex] [--include-thinking] [--include-tools] <pattern>\n\nOPTIONS:\n  --regex\n  --include-thinking\n  --include-tools\n  -h, --help"
+    "codex-history grep\nLiteral or regex transcript search without ranking\n\nUSAGE:\n  codex-history [OPTIONS] grep [--regex] [--include-thinking] [--include-tools] [--compact] <pattern>\n\nOPTIONS:\n  --regex\n  --include-thinking\n  --include-tools\n  --compact\n  -h, --help"
         .to_string()
 }
 
@@ -863,9 +873,14 @@ fn render_grep_matches_human(
     report: &GrepReport,
     pattern: &str,
     regex: bool,
+    compact: bool,
 ) -> Result<(), String> {
     let groups = group_grep_entries(&report.matches, pattern, regex)?;
     let threads = thread_display_info_from_summaries(&report.thread_summaries);
+
+    if compact {
+        return render_compact_thread_results(&groups, &threads);
+    }
 
     for (index, group) in groups.iter().enumerate() {
         if index > 0 {
@@ -913,8 +928,13 @@ fn render_search_results_human(
     entries: &[SearchResult],
     query: &str,
     threads: &HashMap<String, ThreadDisplayInfo>,
+    compact: bool,
 ) -> Result<(), String> {
     let groups = group_search_entries(entries, query);
+
+    if compact {
+        return render_compact_thread_results(&groups, threads);
+    }
 
     for (index, group) in groups.iter().enumerate() {
         if index > 0 {
@@ -957,6 +977,13 @@ fn compact_preview(text: &str) -> String {
     }
 
     preview
+}
+
+fn compact_single_line(text: &str) -> String {
+    text.split_whitespace()
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn thread_display_info_from_summaries(
@@ -1053,8 +1080,15 @@ struct ThreadResultGroup {
     hits: usize,
     occurrences: usize,
     kinds: Vec<String>,
-    preview: String,
+    entries: Vec<ThreadResultEntry>,
     best_score: f64,
+}
+
+#[derive(Debug, Clone)]
+struct ThreadResultEntry {
+    turn_id: Option<String>,
+    kind: String,
+    text: String,
 }
 
 fn group_grep_entries(
@@ -1082,7 +1116,7 @@ fn group_grep_entries(
                 hits: 0,
                 occurrences: 0,
                 kinds: Vec::new(),
-                preview: compact_preview(&entry.text),
+                entries: Vec::new(),
                 best_score: 0.0,
             });
             position
@@ -1091,6 +1125,11 @@ fn group_grep_entries(
         let group = &mut groups[position];
         group.hits += 1;
         group.occurrences += grep_occurrences(&entry.text, pattern, matcher.as_ref(), &terms);
+        group.entries.push(ThreadResultEntry {
+            turn_id: Some(entry.turn_id.clone()),
+            kind: entry.kind.clone(),
+            text: entry.text.clone(),
+        });
         push_unique_kind(&mut group.kinds, &entry.kind);
     }
 
@@ -1113,7 +1152,7 @@ fn group_search_entries(entries: &[SearchResult], query: &str) -> Vec<ThreadResu
                 hits: 0,
                 occurrences: 0,
                 kinds: Vec::new(),
-                preview: compact_preview(&entry.text),
+                entries: Vec::new(),
                 best_score: entry.score,
             });
             position
@@ -1122,9 +1161,13 @@ fn group_search_entries(entries: &[SearchResult], query: &str) -> Vec<ThreadResu
         let group = &mut groups[position];
         group.hits += 1;
         group.occurrences += text_term_occurrences(&entry.text, &terms, query);
+        group.entries.push(ThreadResultEntry {
+            turn_id: entry.turn_id.clone(),
+            kind: entry.kind.clone(),
+            text: entry.text.clone(),
+        });
         if entry.score > group.best_score {
             group.best_score = entry.score;
-            group.preview = compact_preview(&entry.text);
         }
         push_unique_kind(&mut group.kinds, &entry.kind);
     }
@@ -1180,7 +1223,80 @@ fn print_thread_group(
     if let Some(score) = best_score {
         println!("   best score: {:.2}", score);
     }
-    println!("   preview: {}", redact_human_text(&group.preview));
+    for (index, entry) in group.entries.iter().enumerate() {
+        println!();
+        println!(
+            "   {} | turn: {} | hit_id: {}",
+            redact_human_text(human_kind_label(&entry.kind)),
+            redact_human_text(entry.turn_id.as_deref().unwrap_or("-")),
+            redact_human_text(&thread_hit_id(&group.thread_id, entry, index + 1))
+        );
+        print_indented_block(&redact_human_text(&entry.text), "     ");
+    }
+}
+
+fn render_compact_thread_results(
+    groups: &[ThreadResultGroup],
+    threads: &HashMap<String, ThreadDisplayInfo>,
+) -> Result<(), String> {
+    println!("| SOURCE | THREAD_ID | THREAD_NAME | CWD | PREVIEW |");
+    println!("| --- | --- | --- | --- | --- |");
+
+    for group in groups {
+        let info = threads.get(&group.thread_id);
+        let name = info
+            .and_then(thread_human_name)
+            .map(compact_single_line)
+            .unwrap_or_else(|| "(unnamed)".to_string());
+        let cwd = info
+            .and_then(|entry| entry.cwd.as_deref())
+            .map(compact_single_line)
+            .unwrap_or_else(|| "-".to_string());
+
+        for entry in &group.entries {
+            let source = markdown_table_cell(&redact_human_text(human_kind_label(&entry.kind)));
+            let thread_id = markdown_table_cell(&redact_human_text(&group.thread_id));
+            let display_name = markdown_table_cell(&redact_human_text(&name));
+            let display_cwd = markdown_table_cell(&redact_human_text(&cwd));
+            let preview =
+                markdown_table_cell(&redact_human_text(&compact_single_line(&entry.text)));
+            println!(
+                "| {} | {} | {} | {} | {} |",
+                source, thread_id, display_name, display_cwd, preview
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn markdown_table_cell(text: &str) -> String {
+    compact_single_line(text).replace('|', "\\|")
+}
+
+fn thread_human_name<'a>(info: &'a ThreadDisplayInfo) -> Option<&'a str> {
+    info.name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            info.preview
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+        })
+}
+
+fn thread_hit_id(thread_id: &str, entry: &ThreadResultEntry, ordinal: usize) -> String {
+    let turn_id = entry.turn_id.as_deref().unwrap_or("-");
+    format!("{thread_id}:{turn_id}:{}:{ordinal}", entry.kind)
+}
+
+fn print_indented_block(text: &str, indent: &str) {
+    for line in text.lines() {
+        println!("{indent}{line}");
+    }
+    if text.is_empty() {
+        println!("{indent}");
+    }
 }
 
 fn push_unique_kind(kinds: &mut Vec<String>, kind: &str) {
@@ -1401,6 +1517,7 @@ mod tests {
                 fresh: true,
                 include_thinking: false,
                 include_tools: false,
+                compact: false,
             }
         );
 
@@ -1416,6 +1533,7 @@ mod tests {
                 regex: true,
                 include_thinking: false,
                 include_tools: false,
+                compact: false,
             }
         );
     }
@@ -1426,6 +1544,7 @@ mod tests {
             "search".into(),
             "--include-thinking".into(),
             "--include-tools".into(),
+            "--compact".into(),
             "sqlite".into(),
         ])
         .expect("parse success");
@@ -1439,11 +1558,13 @@ mod tests {
                 fresh: false,
                 include_thinking: true,
                 include_tools: true,
+                compact: true,
             }
         );
 
         let parsed = Cli::parse(vec![
             "grep".into(),
+            "--compact".into(),
             "--include-tools".into(),
             "build".into(),
         ])
@@ -1458,6 +1579,7 @@ mod tests {
                 regex: false,
                 include_thinking: false,
                 include_tools: true,
+                compact: true,
             }
         );
     }
@@ -1475,6 +1597,7 @@ mod tests {
                 fresh: false,
                 include_thinking: false,
                 include_tools: false,
+                compact: false,
             }
         );
 
@@ -1490,6 +1613,7 @@ mod tests {
                 regex: true,
                 include_thinking: false,
                 include_tools: false,
+                compact: false,
             }
         );
     }
@@ -1513,6 +1637,7 @@ mod tests {
                 fresh: true,
                 include_thinking: false,
                 include_tools: false,
+                compact: false,
             }
         );
 
@@ -1533,6 +1658,7 @@ mod tests {
                 regex: true,
                 include_thinking: false,
                 include_tools: false,
+                compact: false,
             }
         );
     }

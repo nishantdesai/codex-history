@@ -98,6 +98,7 @@ pub enum IndexCommands {
 pub enum ParseOutcome {
     Run(Cli),
     PrintHelp(String),
+    PrintVersion(String),
 }
 
 impl Cli {
@@ -113,6 +114,7 @@ impl Cli {
         let mut global = GlobalFlags::default();
         let mut command_start = 0;
         let mut wants_top_level_help = false;
+        let mut wants_version = false;
 
         while let Some(arg) = args.get(command_start) {
             if arg == "--backend" {
@@ -136,6 +138,9 @@ impl Cli {
             } else if arg == "--no-color" {
                 global.no_color = true;
                 command_start += 1;
+            } else if matches!(arg.as_str(), "-V" | "--version") {
+                wants_version = true;
+                command_start += 1;
             } else if matches!(arg.as_str(), "-h" | "--help") {
                 wants_top_level_help = true;
                 command_start += 1;
@@ -148,6 +153,9 @@ impl Cli {
 
         if wants_top_level_help {
             return Ok(ParseOutcome::PrintHelp(top_level_help()));
+        }
+        if wants_version {
+            return Ok(ParseOutcome::PrintVersion(version_text()));
         }
 
         let remaining = &args[command_start..];
@@ -643,8 +651,12 @@ fn unexpected_arguments(args: &[String]) -> String {
 }
 
 fn top_level_help() -> String {
-    "codex-history\nRead-only CLI for locally accessible Codex session history\n\nUSAGE:\n  codex-history [OPTIONS] <COMMAND>\n\nOPTIONS:\n  --backend <local|auto>\n  --json\n  --ndjson\n  --quiet\n  --verbose\n  --no-color\n  -h, --help\n\nCOMMANDS:\n  list\n  show <thread-id>\n  search <query>\n  grep <pattern>\n  export <thread-id>\n  doctor\n  index <build|refresh|doctor|drop>\n\nRun `codex-history <COMMAND> --help` for command usage."
+    "codex-history\nRead-only CLI for locally accessible Codex session history\n\nUSAGE:\n  codex-history [OPTIONS] <COMMAND>\n\nOPTIONS:\n  --backend <local|auto>\n  --json\n  --ndjson\n  --quiet\n  --verbose\n  --no-color\n  -V, --version\n  -h, --help\n\nCOMMANDS:\n  list\n  show <thread-id>\n  search <query>\n  grep <pattern>\n  export <thread-id>\n  doctor\n  index <build|refresh|doctor|drop>\n\nRun `codex-history <COMMAND> --help` for command usage."
         .to_string()
+}
+
+pub fn version_text() -> String {
+    format!("codex-history {}", env!("CARGO_PKG_VERSION"))
 }
 
 fn index_help() -> String {
@@ -1274,7 +1286,7 @@ fn markdown_table_cell(text: &str) -> String {
     compact_single_line(text).replace('|', "\\|")
 }
 
-fn thread_human_name<'a>(info: &'a ThreadDisplayInfo) -> Option<&'a str> {
+fn thread_human_name(info: &ThreadDisplayInfo) -> Option<&str> {
     info.name
         .as_deref()
         .filter(|value| !value.trim().is_empty())
@@ -1481,6 +1493,16 @@ mod tests {
         let parsed = Cli::parse(vec!["--backend".into(), "auto".into(), "--help".into()])
             .expect("parse success");
         assert!(matches!(parsed, ParseOutcome::PrintHelp(_)));
+    }
+
+    #[test]
+    fn prints_version_after_global_flags() {
+        let parsed = Cli::parse(vec!["--json".into(), "--version".into()]).expect("parse success");
+        assert_eq!(parsed, ParseOutcome::PrintVersion(version_text()));
+
+        let parsed = Cli::parse(vec!["--backend".into(), "auto".into(), "-V".into()])
+            .expect("parse success");
+        assert_eq!(parsed, ParseOutcome::PrintVersion(version_text()));
     }
 
     #[test]

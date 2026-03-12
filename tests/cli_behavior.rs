@@ -28,6 +28,17 @@ fn top_level_help_goes_to_stdout() {
 }
 
 #[test]
+fn version_goes_to_stdout() {
+    let output = run(&["--version"]);
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        format!("codex-history {}", env!("CARGO_PKG_VERSION"))
+    );
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn command_help_goes_to_stdout_after_global_flags() {
     let output = run(&["--json", "search", "--help"]);
     assert!(output.status.success());

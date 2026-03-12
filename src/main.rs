@@ -16,6 +16,10 @@ fn main() -> ExitCode {
             println!("{text}");
             ExitCode::SUCCESS
         }
+        Ok(codex_history::cli::ParseOutcome::PrintVersion(text)) => {
+            println!("{text}");
+            ExitCode::SUCCESS
+        }
         Err(message) => {
             eprintln!(
                 "error: {}",

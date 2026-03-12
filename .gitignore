@@ -1,4 +1,5 @@
 /target
+/dist
 Cargo.lock
 *.sqlite
 .DS_Store

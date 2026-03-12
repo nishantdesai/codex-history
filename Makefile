@@ -11,3 +11,9 @@ clippy:
 
 test:
 	cargo test --all-targets --all-features
+
+package-release:
+	./scripts/package-release.sh $$(rustc -vV | sed -n 's/^host: //p')
+
+release-checksums:
+	./scripts/generate-checksums.sh

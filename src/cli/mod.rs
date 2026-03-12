@@ -8,7 +8,9 @@ use crate::index::ingest::{
 use crate::index::manifest::default_index_path;
 use crate::index::query::{search_index, search_with_fresh_overlay, SearchResult};
 use crate::index::schema::{doctor as doctor_index, IndexDoctorReport};
-use crate::model::{Item, ThreadDetail, ThreadSummary};
+use crate::model::{
+    render_thread_export, ExportDocument, ExportFormat, Item, ThreadDetail, ThreadSummary,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
@@ -62,7 +64,7 @@ pub enum Commands {
     },
     Export {
         thread_id: String,
-        format: String,
+        format: ExportFormat,
     },
     Doctor,
     Index(IndexCommands),
@@ -193,9 +195,11 @@ impl Cli {
                 let matches = backend.grep(pattern, *regex)?;
                 render_collection(&self.global, &matches, render_grep_match)
             }
-            Commands::Export { .. } => {
-                println!("export: not implemented");
-                Ok(())
+            Commands::Export { thread_id, format } => {
+                let detail = backend
+                    .show_thread(thread_id, true)?
+                    .ok_or_else(|| format!("thread not found: {thread_id}"))?;
+                render_export(&self.global, *format, &detail)
             }
             Commands::Doctor => {
                 let report = backend.doctor()?;
@@ -398,7 +402,7 @@ fn parse_grep(args: &[String]) -> Result<ParsedCommandOutcome, String> {
 
 fn parse_export(args: &[String]) -> Result<ParsedCommand, String> {
     let mut thread_id = None;
-    let mut format = "json".to_string();
+    let mut format = ExportFormat::Json;
     let mut saw_format = false;
     let mut i = 1;
 
@@ -414,7 +418,7 @@ fn parse_export(args: &[String]) -> Result<ParsedCommand, String> {
                     i + 1,
                     "export <thread-id> --format <json|markdown|prompt-pack>",
                 )?;
-                format = parse_export_format(value)?.to_string();
+                format = parse_export_format(value)?;
                 saw_format = true;
                 i += 2;
             }
@@ -549,13 +553,8 @@ fn set_flag(current: bool, flag: &str) -> Result<bool, String> {
     }
 }
 
-fn parse_export_format(value: &str) -> Result<&str, String> {
-    match value {
-        "json" | "markdown" | "prompt-pack" => Ok(value),
-        other => Err(format!(
-            "invalid export format `{other}`; expected json|markdown|prompt-pack"
-        )),
-    }
+fn parse_export_format(value: &str) -> Result<ExportFormat, String> {
+    value.parse()
 }
 
 fn is_help_flag(arg: &str) -> bool {
@@ -694,6 +693,39 @@ where
         print_json_line(value)?;
     }
     Ok(())
+}
+
+fn render_export(
+    global: &GlobalFlags,
+    format: ExportFormat,
+    detail: &ThreadDetail,
+) -> Result<(), String> {
+    match format {
+        ExportFormat::Json => {
+            let document = ExportDocument::new(format, detail.clone());
+            if global.ndjson {
+                print_json_line(&document)
+            } else if global.json {
+                print_json(&document)
+            } else {
+                let rendered = render_thread_export(format, detail)?;
+                println!("{rendered}");
+                Ok(())
+            }
+        }
+        ExportFormat::Markdown | ExportFormat::PromptPack => {
+            if global.json || global.ndjson {
+                return Err(format!(
+                    "cannot combine {} with `export --format {format}`",
+                    if global.ndjson { "--ndjson" } else { "--json" }
+                ));
+            }
+
+            let rendered = render_thread_export(format, detail)?;
+            println!("{rendered}");
+            Ok(())
+        }
+    }
 }
 
 fn render_thread_summary(thread: &ThreadSummary) -> String {
@@ -1050,7 +1082,7 @@ mod tests {
             cli.command,
             Commands::Export {
                 thread_id: "thr_123".into(),
-                format: "markdown".into()
+                format: ExportFormat::Markdown
             }
         );
 

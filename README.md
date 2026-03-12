@@ -1,32 +1,43 @@
-# codex-history
+# `codex-history`
 
-A read-only CLI for locally accessible Codex session history, with search, export, and optional indexing.
+<div align="center">
+  <strong>Read-only CLI for locally accessible Codex session history.</strong>
+  <br />
+  Search transcripts, inspect threads, export handoffs, and build an optional local index.
+</div>
 
-## Current status
+## Quick Start
 
-Phase 7 privacy and redaction is in place.
+Homebrew support is being prepared through the separate `nishantdesai/homebrew-tap` repository.
+Because this main repository is still private, the tap is scaffolded but not yet installable from a public release.
 
-Current behavior:
-- the Rust crate builds and passes CI checks
-- `codex-history --help` works
-- the CLI supports local-history `list`, `show`, `grep`, and `doctor`
-- `index build` creates an opt-in local SQLite FTS index from local session history
-- `index refresh` upserts only new or changed threads using manifest tracking
-- `index doctor` reports index presence, schema version, and core row counts
-- `search <query>` reads ranked results from the local index
-- `search --fresh <query>` overlays newer or changed local threads on top of the index
-- `grep` and `search` search only user and assistant message content by default
-- `grep --include-thinking` and `search --include-thinking` opt into reasoning content
-- `grep --include-tools` and `search --include-tools` opt into command/tool content
-- default human-readable `grep` and `search` output is grouped by thread, shows `thread_id`, prefers a thread name when available, otherwise falls back to the first user prompt, and then renders each matched hit as a compact header plus full text
-- `grep --compact` and `search --compact` print markdown-table-style rows for quick scanning without truncating thread name, cwd, or preview text
-- `export <thread-id> --format <json|markdown|prompt-pack>` renders canonical thread detail in three deterministic export formats
-- command-specific help is available with `codex-history <command> --help`
+When the first public release is published, users will be able to install directly with:
 
-Implemented command surface today:
+```bash
+brew install nishantdesai/tap/codex-history
+```
+
+From source today:
+
+```bash
+cargo build --release
+./target/release/codex-history --help
+```
+
+## What It Does
+
+- reads local Codex history only
+- never mutates or uploads your history
+- supports direct transcript scanning with `grep`
+- supports ranked indexed search with `search`
+- exports threads as JSON, Markdown, or prompt-pack handoff format
+- redacts obvious secrets in human-readable output and keeps JSON output structurally valid
+
+## Command Surface
 
 ```bash
 codex-history --help
+codex-history --version
 codex-history list
 codex-history show <thread-id>
 codex-history show --include-turns <thread-id>
@@ -49,134 +60,88 @@ codex-history index refresh
 codex-history index doctor
 ```
 
-The parser is intentionally strict:
-- malformed command lines return errors
-- invalid flag combinations return non-zero exit codes
-- top-level help works after normal global flag orderings
-- command help goes to stdout and invalid usage goes to stderr
+## Search Modes
 
-## What it does not do
+`search` is the indexed path.
+After `index build`, it is generally much faster than transcript scanning.
 
-- mutate Codex history
-- delete or archive sessions
-- sync your history anywhere
-- require Codex App Server to always be running
+`grep` is the direct local scan path.
+It does not require an index, but it has to walk and parse local history data each time.
 
-## Implementation approach
+Default search scope is conservative:
 
-`codex-history` is **local-first**.
+- `grep` and `search` include user and assistant message content by default
+- `--include-thinking` opts into reasoning content
+- `--include-tools` opts into tool and command content
 
-The intended implementation reads Codex history directly from local persisted session logs, builds optional local search/indexing on top of that, and keeps any App Server integration as possible later work behind a separate adapter.
+Human-readable output modes:
 
-## Backend modes
+- default output groups results by thread and prints full matched text blocks per hit
+- `--compact` prints one markdown-table row per hit with source, thread, cwd, and preview
+- `--json` and `--ndjson` remain the machine-facing interfaces
 
-Current behavior:
-- `local` — accepted by the CLI
-- `auto` — accepted by the CLI and currently treated the same as `local`
+Thread display names come from parsed session metadata when present, and may also be filled from `~/.codex/session_index.jsonl`.
 
-Possible later work:
-- `app-server` — optional adapter, not part of the initial build
-
-## Indexing
-
-Indexing is implemented and remains opt-in.
-
-Current commands:
+## Examples
 
 ```bash
-codex-history index build
-codex-history index refresh
-codex-history index doctor
-```
-
-`search` is the indexed path and is generally much faster after `index build`.
-`grep` is a direct local transcript scan and does not require an index.
-
-Current export commands:
-
-```bash
-codex-history export thr_123 --format json
-codex-history export thr_123 --format markdown
-codex-history export thr_123 --format prompt-pack
-```
-
-## Installation
-
-### Homebrew tap
-
-Planned for a later release phase via `nishantdesai/homebrew-tap`.
-
-### From source
-
-```bash
-cargo build --release
-```
-
-## Usage
-
-Current examples:
-
-```bash
-codex-history --help
-codex-history show --help
-codex-history export thr_123 --format markdown
-codex-history index build
 codex-history search "sqlite3_open_v2"
-codex-history search --fresh "sqlite3_open_v2"
+codex-history search --fresh "deadlock"
 codex-history search --include-tools "cargo test"
 codex-history search --compact "deadlock"
+
 codex-history grep "leftover argv"
 codex-history grep --include-thinking "planner"
 codex-history grep --compact "deadlock"
+
+codex-history export thr_123 --format markdown
+codex-history show --include-turns thr_123
 ```
 
-Human-readable `grep` and `search` results are grouped by thread and show:
-- `thread_id`
-- `name` when available
-- `first prompt` when no thread name is available
-- `cwd`
-- hit and occurrence counts
-- grouped matched content sources, such as `user` or `assistant`
-- per-hit header records with source, turn, and `hit_id`
-- full matched text blocks under each hit
+## Packaging And Releases
 
-Compact mode prints one markdown-table row per hit with:
-- source
-- thread ID
-- thread name or first prompt
-- cwd
-- a single-line preview with compacted whitespace but no deliberate truncation
+Phase 8 packaging and release preparation is in progress in the main repository.
 
-Thread names come from parsed session metadata when present, and may also be filled from `~/.codex/session_index.jsonl` for display.
+Implemented release-prep pieces:
 
-## Suggested repository docs
+- stable `codex-history --version` output
+- native release archive packaging script
+- SHA256 checksum generation script
+- GitHub Actions release workflow for macOS archives and checksums
+- maintainer release notes in [docs/RELEASING.md](docs/RELEASING.md)
 
-- `docs/SPEC.md` — architecture and scope
-- `IMPLEMENTATION_PLAN.md` — execution plan for Codex
-- `HOMEBREW_TAP_PLAN.md` — release and formula handoff
-- `AGENTS.md` — repo-specific instructions for agents
+Build a native release archive and checksums locally:
 
-## Privacy posture
+```bash
+make package-release
+make release-checksums
+```
+
+See [docs/RELEASING.md](docs/RELEASING.md) for archive layout, local validation, and the handoff flow to `nishantdesai/homebrew-tap`.
+
+## Current Status
+
+- local-first backend is implemented
+- export formats are implemented
+- privacy and redaction are implemented
+- packaging and release preparation is underway
+- App Server support is still deferred
+
+## Privacy Posture
 
 - read-only only
 - no telemetry
 - no background daemon
 - synthetic fixtures only in tests
-- default human-readable output sanitizes obvious secrets conservatively where practical
-- home-directory-style paths are sanitized in human-readable output where practical
+- obvious secrets are redacted conservatively in human-readable output
+- home-directory-style paths are sanitized where practical
 - redacted JSON output remains structurally valid
 
-## Status
+## Repository Docs
 
-Early-stage OSS project.
-
-Current phase:
-- Phase 7 privacy and redaction
-
-Next planned phases:
-- Homebrew-tap-ready release packaging
-
-App Server support is deferred for later.
+- [docs/SPEC.md](docs/SPEC.md) — architecture and scope
+- [docs/RELEASING.md](docs/RELEASING.md) — release archives, checksums, and Homebrew-tap handoff
+- [AGENTS.md](AGENTS.md) — repo-specific instructions for agents
 
 ## License
 

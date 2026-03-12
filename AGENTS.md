@@ -8,8 +8,8 @@ This repository builds `codex-history`, a Rust CLI for querying locally accessib
 
 When making architectural or scope decisions, follow:
 1. `docs/SPEC.md`
-2. `IMPLEMENTATION_PLAN.md`
-3. `README.md`
+2. `README.md`
+3. `docs/RELEASING.md`
 
 If these documents conflict, prefer the more conservative interpretation and do not widen scope.
 
@@ -30,20 +30,6 @@ Keep the code structure compatible with a later adapter, but defer that work unt
 - Keep the index opt-in
 - Use synthetic fixtures only
 - Do not check in real history data, indexes, or machine-specific paths
-
-## Build order
-
-Implement in this order:
-1. repository bootstrap and CLI skeleton
-2. canonical models
-3. local backend
-4. grep/list/show
-5. index build and search
-6. refresh and `search --fresh`
-7. export formats
-8. privacy/redaction
-9. release packaging
-10. App Server adapter only later if explicitly requested
 
 ## Code quality rules
 
@@ -72,7 +58,7 @@ Implement in this order:
 
 ## Documentation rules
 
-- keep README and help text aligned with implemented behavior, not future phases
+- keep README, SPEC, and help text aligned with implemented behavior, not future phases
 
 ## When in doubt
 

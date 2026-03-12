@@ -8,6 +8,7 @@ The tool must:
 - list threads/sessions
 - show thread details and turn history
 - support fast full-text search over indexed history
+- support direct transcript scanning without an index
 - remain useful when the latest threads are newer than the local index
 - be open-source-ready from the first commit
 - be distributable via Homebrew tap at `github.com/nishantdesai/homebrew-tap`
@@ -169,8 +170,6 @@ List sessions/threads.
 Examples:
 ```bash
 codex-history list
-codex-history list --backend local --limit 50
-codex-history list --cwd /path/to/repo
 codex-history list --json
 ```
 
@@ -191,7 +190,9 @@ Examples:
 ```bash
 codex-history search "sqlite3_open_v2"
 codex-history search "SwiftData migration" --fresh
-codex-history search "No such module" --cwd /path/to/repo --json
+codex-history search --include-tools "cargo test"
+codex-history search --compact "deadlock"
+codex-history search "No such module" --json
 ```
 
 ### `grep <pattern>`
@@ -201,6 +202,8 @@ Examples:
 ```bash
 codex-history grep "fatal error:"
 codex-history grep --regex "error\s+Domain=.*Code="
+codex-history grep --include-thinking "planner"
+codex-history grep --compact "deadlock"
 ```
 
 ### `export <thread-id>`
@@ -223,7 +226,7 @@ Refresh changed/new threads only.
 Check index integrity and staleness.
 
 ### `index drop`
-Delete the local index after confirmation or `--yes`.
+Reserved for later. It is scaffolded in the CLI design but not implemented in the current release-preparation state.
 
 ### `doctor`
 Check Codex history roots and index paths.
@@ -249,6 +252,10 @@ Support:
 - `--verbose`
 - `--include-turns`
 - `--fresh`
+- `--include-thinking`
+- `--include-tools`
+- `--compact`
+- `--version`
 
 ### CLI behavior contract
 - success payloads go to stdout
@@ -439,7 +446,7 @@ README must clearly state:
 - index is opt-in
 - app-server support is deferred/optional later
 - privacy posture
-- Homebrew install instructions via `nishantdesai/homebrew-tap`
+- Homebrew install instructions via `nishantdesai/tap/codex-history`
 
 ---
 
@@ -463,11 +470,10 @@ The project must be designed for release binaries consumable by a Homebrew tap h
 Recommended packaging model:
 - GitHub Releases publish macOS binaries/tarballs
 - tap repo contains a formula named `codex-history.rb`
-- install command:
+- direct install command:
 
 ```bash
-brew tap nishantdesai/tap
-brew install codex-history
+brew install nishantdesai/tap/codex-history
 ```
 
 The tool repo should document that the tap lives separately at `nishantdesai/homebrew-tap`.

@@ -15,6 +15,10 @@ Current behavior:
 - `index doctor` reports index presence, schema version, and core row counts
 - `search <query>` reads ranked results from the local index
 - `search --fresh <query>` overlays newer or changed local threads on top of the index
+- `grep` and `search` search only user and assistant message content by default
+- `grep --include-thinking` and `search --include-thinking` opt into reasoning content
+- `grep --include-tools` and `search --include-tools` opt into command/tool content
+- default human-readable `grep` and `search` output is grouped by thread, shows `thread_id`, prefers a thread name when available, and otherwise falls back to the first user prompt
 - `export <thread-id> --format <json|markdown|prompt-pack>` renders canonical thread detail in three deterministic export formats
 - command-specific help is available with `codex-history <command> --help`
 
@@ -27,8 +31,12 @@ codex-history show <thread-id>
 codex-history show --include-turns <thread-id>
 codex-history search <query>
 codex-history search --fresh <query>
+codex-history search --include-thinking <query>
+codex-history search --include-tools <query>
 codex-history grep <pattern>
 codex-history grep --regex <pattern>
+codex-history grep --include-thinking <pattern>
+codex-history grep --include-tools <pattern>
 codex-history export <thread-id> --format json
 codex-history export <thread-id> --format markdown
 codex-history export <thread-id> --format prompt-pack
@@ -78,6 +86,9 @@ codex-history index refresh
 codex-history index doctor
 ```
 
+`search` is the indexed path and is generally much faster after `index build`.
+`grep` is a direct local transcript scan and does not require an index.
+
 Current export commands:
 
 ```bash
@@ -109,7 +120,21 @@ codex-history export thr_123 --format markdown
 codex-history index build
 codex-history search "sqlite3_open_v2"
 codex-history search --fresh "sqlite3_open_v2"
+codex-history search --include-tools "cargo test"
+codex-history grep "leftover argv"
+codex-history grep --include-thinking "planner"
 ```
+
+Human-readable `grep` and `search` results are grouped by thread and show:
+- `thread_id`
+- `name` when available
+- `first prompt` when no thread name is available
+- `cwd`
+- hit and occurrence counts
+- matched content source, such as `user` or `assistant`
+- a compact preview snippet
+
+Thread names come from parsed session metadata when present, and may also be filled from `~/.codex/session_index.jsonl` for display.
 
 ## Suggested repository docs
 
@@ -124,7 +149,9 @@ codex-history search --fresh "sqlite3_open_v2"
 - no telemetry
 - no background daemon
 - synthetic fixtures only in tests
-- default human-readable output should sanitize obvious secrets where practical
+- default human-readable output sanitizes obvious secrets conservatively where practical
+- home-directory-style paths are sanitized in human-readable output where practical
+- redacted JSON output remains structurally valid
 
 ## Status
 

@@ -1,5 +1,7 @@
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn fixture_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/local_history/sample_root")
@@ -11,6 +13,57 @@ fn run(args: &[&str]) -> std::process::Output {
         .env("CODEX_HISTORY_HOME", fixture_root())
         .output()
         .expect("binary should run")
+}
+
+fn run_with_home_and_root(args: &[&str], home: &Path, history_root: &Path) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_codex-history"))
+        .args(args)
+        .env("CODEX_HISTORY_HOME", history_root)
+        .env("HOME", home)
+        .output()
+        .expect("binary should run")
+}
+
+fn temp_home(label: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("codex-history-export-home-{label}-{nanos}"));
+    fs::create_dir_all(&path).expect("create temp home");
+    path
+}
+
+fn temp_history_root(label: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("codex-history-export-history-{label}-{nanos}"));
+    copy_dir_all(&fixture_root(), &root).expect("copy fixture root");
+    root
+}
+
+fn copy_dir_all(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let destination = to.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_all(&entry.path(), &destination)?;
+        } else {
+            fs::copy(entry.path(), destination)?;
+        }
+    }
+    Ok(())
+}
+
+fn replace_in_file(path: &Path, from: &str, to: &str) {
+    let content = fs::read_to_string(path).expect("read file");
+    let updated = content.replace(from, to);
+    assert_ne!(content, updated, "replacement should change file");
+    fs::write(path, updated).expect("write updated file");
 }
 
 #[test]
@@ -193,4 +246,95 @@ fn export_markdown_rejects_global_json_flag() {
 
     let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
     assert!(stderr.contains("error: cannot combine --json with `export --format markdown`"));
+}
+
+#[test]
+fn export_markdown_redacts_secrets_and_sanitizes_home_paths() {
+    let home = temp_home("redaction-human");
+    let history_root = temp_history_root("redaction-human");
+    let thread_path = history_root.join("sessions").join("thr_command.jsonl");
+    let home_project = home.join("project");
+    let home_project_text = home_project.display().to_string();
+
+    replace_in_file(&thread_path, "/workspace/commands", &home_project_text);
+    replace_in_file(
+        &thread_path,
+        "Run grep without an index.",
+        "Use api_key=plainsecret123456 and JWT eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkNvZGV4In0.signaturepayload1234567890",
+    );
+    replace_in_file(
+        &thread_path,
+        "src/lib.rs:10:cargo test",
+        "Authorization: Bearer sk-live_1234567890abcdefghijklmnop ghp_123456789012345678901234567890123456",
+    );
+
+    let output = run_with_home_and_root(
+        &["export", "thr_command", "--format", "markdown"],
+        &home,
+        &history_root,
+    );
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    assert!(stdout.contains("`~/project`"));
+    assert!(!stdout.contains(&home_project_text));
+    assert!(!stdout.contains("plainsecret123456"));
+    assert!(!stdout.contains("signaturepayload1234567890"));
+    assert!(!stdout.contains("sk-live_1234567890abcdefghijklmnop"));
+    assert!(!stdout.contains("ghp_123456789012345678901234567890123456"));
+    assert!(stdout.contains("api_key=[REDACTED]"));
+    assert!(stdout.contains("Bearer [REDACTED]"));
+
+    fs::remove_dir_all(home).expect("cleanup temp home");
+    fs::remove_dir_all(history_root).expect("cleanup temp history");
+}
+
+#[test]
+fn export_json_redaction_keeps_valid_json() {
+    let home = temp_home("redaction-json");
+    let history_root = temp_history_root("redaction-json");
+    let thread_path = history_root.join("sessions").join("thr_command.jsonl");
+    let home_project = home.join("project");
+
+    replace_in_file(
+        &thread_path,
+        "Run grep without an index.",
+        "Use api_key=plainsecret123456 and JWT eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkNvZGV4In0.signaturepayload1234567890",
+    );
+    replace_in_file(
+        &thread_path,
+        "src/lib.rs:10:cargo test",
+        "Authorization: Bearer sk-live_1234567890abcdefghijklmnop",
+    );
+    replace_in_file(
+        &thread_path,
+        "/workspace/commands",
+        &home_project.display().to_string(),
+    );
+
+    let output = run_with_home_and_root(
+        &["export", "thr_command", "--format", "json"],
+        &home,
+        &history_root,
+    );
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let document: serde_json::Value = serde_json::from_str(&stdout).expect("valid json");
+    let items = document["thread"]["turns"][0]["items"]
+        .as_array()
+        .expect("items array");
+
+    assert_eq!(
+        items[0]["text"],
+        "Use api_key=[REDACTED] and JWT [REDACTED]"
+    );
+    assert_eq!(items[1]["output"], "Authorization: Bearer [REDACTED]");
+    assert_eq!(
+        document["thread"]["cwd"],
+        serde_json::Value::String(home_project.display().to_string())
+    );
+
+    fs::remove_dir_all(home).expect("cleanup temp home");
+    fs::remove_dir_all(history_root).expect("cleanup temp history");
 }

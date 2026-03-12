@@ -149,17 +149,15 @@ fn show_returns_thread_detail_from_fixture() {
 
 #[test]
 fn grep_works_without_an_index() {
-    let output = run(&["--json", "grep", "cargo test"]);
+    let output = run(&["--json", "grep", "leftover argv"]);
     assert!(output.status.success());
 
     let matches: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json output");
     let entries = matches.as_array().expect("array");
     assert!(!entries.is_empty());
-    assert!(entries
-        .iter()
-        .any(|entry| entry["kind"] == "command_execution"));
+    assert!(entries.iter().any(|entry| entry["kind"] == "agent_message"));
 
-    let shell_output = run(&["--json", "grep", "help ok"]);
+    let shell_output = run(&["--json", "grep", "--include-tools", "help ok"]);
     assert!(shell_output.status.success());
     let shell_matches: serde_json::Value =
         serde_json::from_slice(&shell_output.stdout).expect("json output");
@@ -168,6 +166,22 @@ fn grep_works_without_an_index() {
         .expect("array")
         .iter()
         .any(|entry| entry["thread_id"] == "thr_simple" && entry["kind"] == "command_execution"));
+}
+
+#[test]
+fn grep_human_output_groups_matches_by_thread() {
+    let output = run(&["grep", "leftover argv"]);
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    assert!(stdout.contains("1. thread_id: thr_simple"));
+    assert!(stdout.contains("first prompt: Please inspect the parser regression."));
+    assert!(stdout.contains("cwd: /workspace/sample"));
+    assert!(stdout.contains("hits: 1"));
+    assert!(stdout.contains("occurrences: 2"));
+    assert!(stdout.contains("matched in: assistant"));
+    assert!(stdout.contains("preview: I found the leftover argv issue."));
+    assert!(!stdout.contains('\t'));
 }
 
 #[test]
@@ -243,11 +257,29 @@ fn index_build_creates_db_and_doctor_reports_counts() {
 fn search_requires_index_build_first() {
     let home = temp_home("search-missing-index");
 
-    let output = run_with_home(&["search", "help ok"], &home);
+    let output = run_with_home(&["search", "leftover argv"], &home);
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("run `codex-history index build` first"));
+
+    std::fs::remove_dir_all(home).expect("cleanup temp home");
+}
+
+#[test]
+fn missing_index_error_sanitizes_home_path_in_stderr() {
+    let home = temp_home("search-missing-index-redacted");
+
+    let output = run_with_home(&["search", "help ok"], &home);
+    assert_eq!(output.status.code(), Some(1));
+
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+    assert!(!stderr.contains(&home.display().to_string()));
+    if cfg!(target_os = "macos") {
+        assert!(stderr.contains("~/Library/Application Support/codex-history/index.sqlite"));
+    } else {
+        assert!(stderr.contains("~/.local/share/codex-history/index.sqlite"));
+    }
 
     std::fs::remove_dir_all(home).expect("cleanup temp home");
 }
@@ -259,18 +291,63 @@ fn search_reads_ranked_results_from_index() {
     let build_output = run_with_home(&["--json", "index", "build"], &home);
     assert!(build_output.status.success());
 
-    let search_output = run_with_home(&["--json", "search", "help ok"], &home);
+    let search_output = run_with_home(&["--json", "search", "leftover argv"], &home);
     assert!(search_output.status.success());
     let results: serde_json::Value =
         serde_json::from_slice(&search_output.stdout).expect("json output");
     let entries = results.as_array().expect("results array");
     assert!(!entries.is_empty());
     assert_eq!(entries[0]["thread_id"], "thr_simple");
-    assert_eq!(entries[0]["kind"], "command_execution");
+    assert_eq!(entries[0]["kind"], "agent_message");
     assert!(entries[0]["text"]
         .as_str()
         .expect("result text")
-        .contains("help ok"));
+        .contains("leftover argv"));
+
+    std::fs::remove_dir_all(home).expect("cleanup temp home");
+}
+
+#[test]
+fn search_human_output_groups_matches_by_thread() {
+    let home = temp_home("search-human");
+
+    let build_output = run_with_home(&["--json", "index", "build"], &home);
+    assert!(build_output.status.success());
+
+    let output = run_with_home(&["search", "leftover argv"], &home);
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    assert!(stdout.contains("1. thread_id: thr_simple"));
+    assert!(stdout.contains("first prompt: Please inspect the parser regression."));
+    assert!(stdout.contains("cwd: /workspace/sample"));
+    assert!(stdout.contains("hits: 1"));
+    assert!(stdout.contains("occurrences: 2"));
+    assert!(stdout.contains("matched in: assistant"));
+    assert!(stdout.contains("best score:"));
+    assert!(stdout.contains("preview:"));
+    assert!(stdout.contains("leftover argv"));
+    assert!(!stdout.contains('\t'));
+
+    std::fs::remove_dir_all(home).expect("cleanup temp home");
+}
+
+#[test]
+fn list_uses_session_index_thread_name_when_available() {
+    let home = temp_home("session-index-name");
+    let codex_home = home.join(".codex");
+    std::fs::create_dir_all(&codex_home).expect("create codex home");
+    std::fs::write(
+        codex_home.join("session_index.jsonl"),
+        "{\"id\":\"thr_simple\",\"thread_name\":\"Named From Session Index\",\"updated_at\":\"2026-03-12T00:00:00Z\"}\n",
+    )
+    .expect("write session index");
+
+    let output = run_with_home(&["list"], &home);
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    assert!(stdout.contains("thr_simple\tNamed From Session Index\t"));
 
     std::fs::remove_dir_all(home).expect("cleanup temp home");
 }
@@ -307,7 +384,12 @@ fn index_refresh_upserts_changed_and_new_threads_while_skipping_unchanged() {
     assert!(report["watermark"].is_string());
 
     let changed_search = run_with_home_and_root(
-        &["--json", "search", "refresh unique output"],
+        &[
+            "--json",
+            "search",
+            "--include-tools",
+            "refresh unique output",
+        ],
         &home,
         &history_root,
     );
@@ -358,8 +440,11 @@ fn search_fresh_merges_overlay_results_without_duplicates() {
         "help ok",
     );
 
-    let plain_output =
-        run_with_home_and_root(&["--json", "search", "help ok"], &home, &history_root);
+    let plain_output = run_with_home_and_root(
+        &["--json", "search", "--include-tools", "help ok"],
+        &home,
+        &history_root,
+    );
     assert!(plain_output.status.success());
     let plain_results: serde_json::Value =
         serde_json::from_slice(&plain_output.stdout).expect("json output");
@@ -383,6 +468,23 @@ fn search_fresh_merges_overlay_results_without_duplicates() {
         .any(|entry| entry["thread_id"] == "thr_overlay_new"));
     assert_eq!(
         entries
+            .iter()
+            .filter(|entry| entry["thread_id"] == "thr_simple" && entry["kind"] == "agent_message")
+            .count(),
+        1
+    );
+
+    let fresh_tool_output = run_with_home_and_root(
+        &["--json", "search", "--fresh", "--include-tools", "help ok"],
+        &home,
+        &history_root,
+    );
+    assert!(fresh_tool_output.status.success());
+    let fresh_tool_results: serde_json::Value =
+        serde_json::from_slice(&fresh_tool_output.stdout).expect("json output");
+    let tool_entries = fresh_tool_results.as_array().expect("array");
+    assert_eq!(
+        tool_entries
             .iter()
             .filter(
                 |entry| entry["thread_id"] == "thr_simple" && entry["kind"] == "command_execution"

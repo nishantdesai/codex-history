@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, params_from_iter, Connection};
 use serde::Serialize;
 
 use crate::index::ingest::search_documents_for_thread;
@@ -11,6 +11,7 @@ use crate::index::manifest::{
 };
 use crate::index::schema::{doctor, open_connection};
 use crate::model::ThreadDetail;
+use crate::search_scope::SearchScope;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SearchResult {
@@ -23,15 +24,65 @@ pub struct SearchResult {
     pub cwd: Option<String>,
 }
 
-pub fn search_index(path: &Path, query: &str, limit: usize) -> Result<Vec<SearchResult>, String> {
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexedThreadInfo {
+    pub thread_id: String,
+    pub name: Option<String>,
+    pub preview: Option<String>,
+    pub cwd: Option<String>,
+}
+
+pub fn search_index(
+    path: &Path,
+    query: &str,
+    limit: usize,
+    scope: SearchScope,
+) -> Result<Vec<SearchResult>, String> {
     let conn = open_search_connection(path)?;
-    execute_search(&conn, query, limit, 0)
+    execute_search(&conn, query, limit, 0, scope)
+}
+
+pub fn load_index_thread_info(
+    path: &Path,
+    thread_ids: &[String],
+) -> Result<HashMap<String, IndexedThreadInfo>, String> {
+    if thread_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let conn = open_search_connection(path)?;
+    let placeholders = vec!["?"; thread_ids.len()].join(", ");
+    let sql = format!(
+        "SELECT thread_id, name, preview, cwd FROM threads WHERE thread_id IN ({placeholders})"
+    );
+    let mut statement = conn
+        .prepare(&sql)
+        .map_err(|error| format!("failed to prepare thread info query: {error}"))?;
+    let rows = statement
+        .query_map(params_from_iter(thread_ids.iter()), |row| {
+            Ok(IndexedThreadInfo {
+                thread_id: row.get(0)?,
+                name: row.get(1)?,
+                preview: row.get(2)?,
+                cwd: row.get(3)?,
+            })
+        })
+        .map_err(|error| format!("failed to execute thread info query: {error}"))?;
+
+    let mut info = HashMap::new();
+    for row in rows {
+        let row = row.map_err(|error| format!("failed to decode thread info row: {error}"))?;
+        info.insert(row.thread_id.clone(), row);
+    }
+
+    Ok(info)
 }
 
 pub fn search_with_fresh_overlay(
     path: &Path,
     query: &str,
     limit: usize,
+    scope: SearchScope,
     current_details: &[ThreadDetail],
     manifest: &HashMap<String, ThreadManifestRecord>,
 ) -> Result<Vec<SearchResult>, String> {
@@ -51,16 +102,22 @@ pub fn search_with_fresh_overlay(
     }
 
     if changed_thread_ids.is_empty() {
-        return search_index(path, query, limit);
+        return search_index(path, query, limit, scope);
     }
 
     let conn = open_search_connection(path)?;
-    let mut results =
-        collect_index_results_excluding_threads(&conn, query, expanded_limit, &changed_thread_ids)?;
+    let mut results = collect_index_results_excluding_threads(
+        &conn,
+        query,
+        expanded_limit,
+        &changed_thread_ids,
+        scope,
+    )?;
     results.extend(search_local_details(
         query,
         &changed_details,
         expanded_limit,
+        scope,
     ));
     Ok(merge_results(results, limit))
 }
@@ -88,6 +145,7 @@ fn execute_search(
     query: &str,
     limit: usize,
     offset: usize,
+    scope: SearchScope,
 ) -> Result<Vec<SearchResult>, String> {
     let trimmed_query = query.trim();
     if trimmed_query.is_empty() {
@@ -96,9 +154,9 @@ fn execute_search(
 
     let fts_query = to_fts_query(trimmed_query);
     let like_query = trimmed_query.to_lowercase();
-    let mut statement = conn
-        .prepare(
-            "
+    let kind_filter = scope.search_kind_sql();
+    let sql = format!(
+        "
             SELECT
                 sd.thread_id,
                 sd.turn_id,
@@ -125,11 +183,14 @@ fn execute_search(
             FROM search_docs_fts
             JOIN search_docs AS sd ON sd.doc_id = search_docs_fts.rowid
             WHERE search_docs_fts MATCH ?1
+              AND sd.kind IN ({kind_filter})
             ORDER BY heuristic_rank DESC, fts_rank ASC, sd.updated_at DESC, sd.doc_id ASC
             LIMIT ?3
             OFFSET ?4
-            ",
-        )
+            "
+    );
+    let mut statement = conn
+        .prepare(&sql)
         .map_err(|error| format!("failed to prepare search query: {error}"))?;
 
     let rows = statement
@@ -161,13 +222,14 @@ fn collect_index_results_excluding_threads(
     query: &str,
     desired_count: usize,
     excluded_thread_ids: &HashSet<String>,
+    scope: SearchScope,
 ) -> Result<Vec<SearchResult>, String> {
     let page_size = desired_count.max(1);
     let mut offset = 0;
     let mut results = Vec::new();
 
     loop {
-        let page = execute_search(conn, query, page_size, offset)?;
+        let page = execute_search(conn, query, page_size, offset, scope)?;
         if page.is_empty() {
             break;
         }
@@ -188,7 +250,12 @@ fn collect_index_results_excluding_threads(
     Ok(results)
 }
 
-fn search_local_details(query: &str, details: &[&ThreadDetail], limit: usize) -> Vec<SearchResult> {
+fn search_local_details(
+    query: &str,
+    details: &[&ThreadDetail],
+    limit: usize,
+    scope: SearchScope,
+) -> Vec<SearchResult> {
     let trimmed_query = query.trim();
     if trimmed_query.is_empty() {
         return Vec::new();
@@ -199,6 +266,9 @@ fn search_local_details(query: &str, details: &[&ThreadDetail], limit: usize) ->
 
     for detail in details {
         for doc in search_documents_for_thread(detail) {
+            if !scope.includes_search_kind(&doc.kind) {
+                continue;
+            }
             let searchable = format!("{}\n{}", doc.title.as_deref().unwrap_or_default(), doc.text);
             let searchable_tokens = query_tokens(&searchable);
             let searchable_token_set = searchable_tokens.iter().cloned().collect::<HashSet<_>>();
@@ -338,6 +408,7 @@ mod tests {
     use crate::backend::local::LocalBackend;
     use crate::index::ingest::build_local_index;
     use crate::index::manifest::load_manifest;
+    use crate::search_scope::SearchScope;
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -358,11 +429,12 @@ mod tests {
         let path = temp_db_path("search-index");
         build_local_index(&backend, &path).expect("build index");
 
-        let results = search_index(&path, "help ok", 10).expect("search");
+        let results =
+            search_index(&path, "leftover argv", 10, SearchScope::default()).expect("search");
         assert!(!results.is_empty());
         assert_eq!(results[0].thread_id, "thr_simple");
-        assert_eq!(results[0].kind, "command_execution");
-        assert!(results[0].text.contains("help ok"));
+        assert_eq!(results[0].kind, "agent_message");
+        assert!(results[0].text.contains("leftover argv"));
 
         std::fs::remove_file(path).expect("cleanup db");
         env::remove_var("CODEX_HISTORY_HOME");
@@ -387,8 +459,18 @@ mod tests {
             let conn = open_connection(&path).expect("open db");
             load_manifest(&conn).expect("manifest")
         };
-        let results = search_with_fresh_overlay(&path, "help ok", 10, &details, &manifest)
-            .expect("fresh search");
+        let results = search_with_fresh_overlay(
+            &path,
+            "help ok",
+            10,
+            SearchScope {
+                include_thinking: false,
+                include_tools: true,
+            },
+            &details,
+            &manifest,
+        )
+        .expect("fresh search");
         let simple_hits = results
             .iter()
             .filter(|result| result.thread_id == "thr_simple" && result.kind == "command_execution")

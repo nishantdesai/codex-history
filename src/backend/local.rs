@@ -1,12 +1,17 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::{env, fs};
 
 use chrono::{DateTime, Utc};
 use regex::Regex;
+use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::model::{CommandExecutionItem, FileChangeItem, Item, ThreadDetail, ThreadSummary, Turn};
 use crate::parser::jsonl::{parse_session_log_incremental, PendingCommandCall};
+use crate::search_scope::SearchScope;
 use crate::util::paths::{collect_session_log_files, discover_history_roots, HistoryRootCandidate};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -32,6 +37,11 @@ pub struct GrepMatch {
     pub turn_id: String,
     pub kind: String,
     pub text: String,
+}
+
+pub struct GrepReport {
+    pub matches: Vec<GrepMatch>,
+    pub thread_summaries: HashMap<String, ThreadSummary>,
 }
 
 pub struct LocalBackend {
@@ -85,7 +95,25 @@ impl LocalBackend {
         Ok(threads)
     }
 
-    pub fn grep(&self, pattern: &str, regex: bool) -> Result<Vec<GrepMatch>, String> {
+    pub fn grep(
+        &self,
+        pattern: &str,
+        regex: bool,
+        scope: SearchScope,
+    ) -> Result<Vec<GrepMatch>, String> {
+        Ok(self.grep_report(pattern, regex, scope)?.matches)
+    }
+
+    pub fn grep_report(
+        &self,
+        pattern: &str,
+        regex: bool,
+        scope: SearchScope,
+    ) -> Result<GrepReport, String> {
+        if scope == SearchScope::default() {
+            return self.grep_report_messages_only(pattern, regex);
+        }
+
         let matcher = if regex {
             Some(
                 Regex::new(pattern)
@@ -95,12 +123,15 @@ impl LocalBackend {
             None
         };
 
+        let scan = self.scan_threads()?;
         let mut matches = Vec::new();
-        for parsed in self.scan_threads()?.threads {
+        let mut thread_summaries = HashMap::new();
+        for parsed in scan.threads {
             let thread_id = parsed.summary.thread_id.clone();
+            thread_summaries.insert(thread_id.clone(), parsed.summary.clone());
             for turn in parsed.turns {
                 for item in turn.items {
-                    for text in item_texts(&item) {
+                    for text in item_texts(&item, scope) {
                         let matched = match &matcher {
                             Some(regex) => regex.is_match(&text),
                             None => text.contains(pattern),
@@ -119,7 +150,10 @@ impl LocalBackend {
             }
         }
 
-        Ok(matches)
+        Ok(GrepReport {
+            matches,
+            thread_summaries,
+        })
     }
 
     pub fn doctor(&self) -> Result<LocalDoctorReport, String> {
@@ -201,12 +235,54 @@ impl LocalBackend {
         for thread in threads_by_id.values_mut() {
             recompute_thread_counts(thread);
         }
+        apply_session_index_names(&mut threads_by_id);
 
         Ok(LocalScan {
             threads: threads_by_id.into_values().collect(),
             malformed_files,
             malformed_lines,
             warnings,
+        })
+    }
+
+    fn grep_report_messages_only(&self, pattern: &str, regex: bool) -> Result<GrepReport, String> {
+        let matcher = if regex {
+            Some(
+                Regex::new(pattern)
+                    .map_err(|error| format!("invalid regex `{pattern}`: {error}"))?,
+            )
+        } else {
+            None
+        };
+
+        let mut session_files = Vec::new();
+        for root in &self.roots {
+            if !root.exists {
+                continue;
+            }
+            let (files, _) = collect_session_log_files(&root.path);
+            session_files.extend(files);
+        }
+        session_files.sort();
+
+        let mut matches = Vec::new();
+        let mut thread_summaries = BTreeMap::new();
+
+        for file in session_files {
+            scan_messages_only_file(
+                &file,
+                pattern,
+                matcher.as_ref(),
+                &mut matches,
+                &mut thread_summaries,
+            )?;
+        }
+
+        apply_session_index_names_to_summaries(&mut thread_summaries);
+
+        Ok(GrepReport {
+            matches,
+            thread_summaries: thread_summaries.into_iter().collect(),
         })
     }
 }
@@ -216,6 +292,92 @@ struct LocalScan {
     malformed_files: usize,
     malformed_lines: usize,
     warnings: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct SessionIndexEntry {
+    id: String,
+    #[serde(default)]
+    thread_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FastRawEnvelope<T> {
+    #[serde(default)]
+    timestamp: Option<DateTime<Utc>>,
+    payload: T,
+}
+
+#[derive(Debug, Deserialize)]
+struct FastRawSessionMeta {
+    id: String,
+    timestamp: DateTime<Utc>,
+    #[serde(default, alias = "title")]
+    name: Option<String>,
+    #[serde(default)]
+    cwd: Option<PathBuf>,
+    #[serde(default)]
+    source: Option<Value>,
+    #[serde(default)]
+    originator: Option<String>,
+    #[serde(default)]
+    model_provider: Option<String>,
+}
+
+pub(crate) fn load_session_index_names() -> Result<HashMap<String, String>, String> {
+    let Some(home) = env::var_os("HOME").map(PathBuf::from) else {
+        return Ok(HashMap::new());
+    };
+    let path = home.join(".codex/session_index.jsonl");
+    if !path.exists() {
+        return Ok(HashMap::new());
+    }
+
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("failed to read session index {}: {error}", path.display()))?;
+    let mut names = HashMap::new();
+
+    for line in content.lines().filter(|line| !line.trim().is_empty()) {
+        let Ok(entry) = serde_json::from_str::<SessionIndexEntry>(line) else {
+            continue;
+        };
+        let Some(name) = entry.thread_name.filter(|value| !value.trim().is_empty()) else {
+            continue;
+        };
+        names.insert(entry.id, name);
+    }
+
+    Ok(names)
+}
+
+fn apply_session_index_names(threads: &mut BTreeMap<String, ThreadDetail>) {
+    let Ok(names) = load_session_index_names() else {
+        return;
+    };
+
+    for (thread_id, name) in names {
+        let Some(thread) = threads.get_mut(&thread_id) else {
+            continue;
+        };
+        if thread.summary.name.is_none() {
+            thread.summary.name = Some(name);
+        }
+    }
+}
+
+fn apply_session_index_names_to_summaries(threads: &mut BTreeMap<String, ThreadSummary>) {
+    let Ok(names) = load_session_index_names() else {
+        return;
+    };
+
+    for (thread_id, name) in names {
+        let Some(thread) = threads.get_mut(&thread_id) else {
+            continue;
+        };
+        if thread.name.is_none() {
+            thread.name = Some(name);
+        }
+    }
 }
 
 fn merge_thread_detail(existing: &mut ThreadDetail, incoming: ThreadDetail) {
@@ -244,7 +406,7 @@ fn merge_thread_summary(existing: &mut ThreadSummary, incoming: ThreadSummary) {
     };
 
     merge_optional_field(&mut existing.name, incoming.name, prefer_incoming);
-    merge_optional_field(&mut existing.preview, incoming.preview, prefer_incoming);
+    merge_preview_field(&mut existing.preview, incoming.preview);
     merge_optional_field(&mut existing.cwd, incoming.cwd, prefer_incoming);
     merge_optional_field(
         &mut existing.source_kind,
@@ -267,6 +429,374 @@ fn merge_optional_field<T>(existing: &mut Option<T>, incoming: Option<T>, prefer
         }
     } else if existing.is_none() {
         *existing = incoming;
+    }
+}
+
+fn merge_preview_field(existing: &mut Option<String>, incoming: Option<String>) {
+    if existing.is_none() && incoming.is_some() {
+        *existing = incoming;
+    }
+}
+
+fn scan_messages_only_file(
+    path: &Path,
+    pattern: &str,
+    regex: Option<&Regex>,
+    matches: &mut Vec<GrepMatch>,
+    thread_summaries: &mut BTreeMap<String, ThreadSummary>,
+) -> Result<(), String> {
+    let file = fs::File::open(path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    let reader = BufReader::new(file);
+    let mut state = FastGrepFileState::new(path);
+
+    for line in reader.lines() {
+        let line = match line {
+            Ok(line) => line,
+            Err(_) => continue,
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value: Value = match serde_json::from_str(&line) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        scan_message_only_value(value, &mut state, pattern, regex, matches, thread_summaries);
+    }
+
+    Ok(())
+}
+
+fn scan_message_only_value(
+    value: Value,
+    state: &mut FastGrepFileState,
+    pattern: &str,
+    regex: Option<&Regex>,
+    matches: &mut Vec<GrepMatch>,
+    thread_summaries: &mut BTreeMap<String, ThreadSummary>,
+) {
+    let line_timestamp = fast_top_level_timestamp(&value);
+    let Some(kind) = value.get("type").and_then(Value::as_str) else {
+        return;
+    };
+
+    match kind {
+        "session_meta" => {
+            let Ok(raw) = serde_json::from_value::<FastRawEnvelope<FastRawSessionMeta>>(value)
+            else {
+                return;
+            };
+            state.thread_id = Some(raw.payload.id.clone());
+            let incoming = ThreadSummary {
+                thread_id: raw.payload.id,
+                name: raw.payload.name,
+                preview: None,
+                created_at: raw.payload.timestamp,
+                updated_at: raw.timestamp.or(Some(raw.payload.timestamp)),
+                cwd: raw.payload.cwd,
+                source_kind: raw
+                    .payload
+                    .source
+                    .as_ref()
+                    .and_then(fast_source_kind_from_value)
+                    .or(raw.payload.originator),
+                model_provider: raw.payload.model_provider,
+                ephemeral: None,
+                status: Some("running".into()),
+            };
+            merge_fast_thread_summary(thread_summaries, incoming);
+        }
+        "turn_context" => {
+            let Some(payload) = value.get("payload").and_then(Value::as_object) else {
+                return;
+            };
+            state.current_turn_id = Some(match payload.get("turn_id").and_then(Value::as_str) {
+                Some(turn_id) => turn_id.to_string(),
+                None => state.next_implicit_turn_id(),
+            });
+        }
+        "event_msg" => {
+            let Some(payload) = value.get("payload").and_then(Value::as_object) else {
+                return;
+            };
+            let Some(event_type) = payload.get("type").and_then(Value::as_str) else {
+                return;
+            };
+            match event_type {
+                "task_started" => {
+                    state.current_turn_id =
+                        Some(match payload.get("turn_id").and_then(Value::as_str) {
+                            Some(turn_id) => turn_id.to_string(),
+                            None => state.next_implicit_turn_id(),
+                        });
+                    note_summary_timestamp(
+                        thread_summaries,
+                        state.thread_id.as_deref(),
+                        line_timestamp,
+                    );
+                }
+                "user_message" => {
+                    let Some(text) = payload.get("message").and_then(Value::as_str) else {
+                        return;
+                    };
+                    let Some(turn_id) =
+                        state.resolve_turn_id(payload.get("turn_id").and_then(Value::as_str))
+                    else {
+                        return;
+                    };
+                    note_preview(thread_summaries, state.thread_id.as_deref(), text);
+                    push_grep_match(
+                        matches,
+                        state.thread_id.as_deref(),
+                        &turn_id,
+                        "user_message",
+                        text,
+                        pattern,
+                        regex,
+                    );
+                    note_summary_timestamp(
+                        thread_summaries,
+                        state.thread_id.as_deref(),
+                        line_timestamp,
+                    );
+                }
+                "agent_message" => {
+                    let Some(text) = payload.get("message").and_then(Value::as_str) else {
+                        return;
+                    };
+                    let Some(turn_id) =
+                        state.resolve_turn_id(payload.get("turn_id").and_then(Value::as_str))
+                    else {
+                        return;
+                    };
+                    push_grep_match(
+                        matches,
+                        state.thread_id.as_deref(),
+                        &turn_id,
+                        "agent_message",
+                        text,
+                        pattern,
+                        regex,
+                    );
+                    note_summary_timestamp(
+                        thread_summaries,
+                        state.thread_id.as_deref(),
+                        line_timestamp,
+                    );
+                }
+                "task_complete" => {
+                    note_summary_timestamp(
+                        thread_summaries,
+                        state.thread_id.as_deref(),
+                        line_timestamp,
+                    );
+                }
+                _ => {}
+            }
+        }
+        "response_item" => {
+            let Some(payload) = value.get("payload").and_then(Value::as_object) else {
+                return;
+            };
+            if payload.get("type").and_then(Value::as_str) != Some("message") {
+                return;
+            }
+            let Some(turn_id) =
+                state.resolve_turn_id(payload.get("turn_id").and_then(Value::as_str))
+            else {
+                return;
+            };
+            let Some(text) = fast_extract_response_text(payload.get("content")).or_else(|| {
+                payload
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }) else {
+                return;
+            };
+            let kind = match payload.get("role").and_then(Value::as_str) {
+                Some("assistant") => "agent_message",
+                _ => "user_message",
+            };
+            if kind == "user_message" {
+                note_preview(thread_summaries, state.thread_id.as_deref(), &text);
+            }
+            push_grep_match(
+                matches,
+                state.thread_id.as_deref(),
+                &turn_id,
+                kind,
+                &text,
+                pattern,
+                regex,
+            );
+            note_summary_timestamp(thread_summaries, state.thread_id.as_deref(), line_timestamp);
+        }
+        _ => {}
+    }
+}
+
+fn merge_fast_thread_summary(
+    threads: &mut BTreeMap<String, ThreadSummary>,
+    incoming: ThreadSummary,
+) {
+    match threads.get_mut(&incoming.thread_id) {
+        Some(existing) => merge_thread_summary(existing, incoming),
+        None => {
+            threads.insert(incoming.thread_id.clone(), incoming);
+        }
+    }
+}
+
+fn note_preview(
+    thread_summaries: &mut BTreeMap<String, ThreadSummary>,
+    thread_id: Option<&str>,
+    text: &str,
+) {
+    let Some(thread_id) = thread_id else {
+        return;
+    };
+    let Some(summary) = thread_summaries.get_mut(thread_id) else {
+        return;
+    };
+    if summary.preview.is_none() && !text.is_empty() {
+        summary.preview = Some(text.to_string());
+    }
+}
+
+fn note_summary_timestamp(
+    thread_summaries: &mut BTreeMap<String, ThreadSummary>,
+    thread_id: Option<&str>,
+    timestamp: Option<DateTime<Utc>>,
+) {
+    let (Some(thread_id), Some(timestamp)) = (thread_id, timestamp) else {
+        return;
+    };
+    let Some(summary) = thread_summaries.get_mut(thread_id) else {
+        return;
+    };
+    summary.updated_at = Some(
+        summary
+            .updated_at
+            .unwrap_or(summary.created_at)
+            .max(timestamp),
+    );
+}
+
+fn push_grep_match(
+    matches: &mut Vec<GrepMatch>,
+    thread_id: Option<&str>,
+    turn_id: &str,
+    kind: &str,
+    text: &str,
+    pattern: &str,
+    regex: Option<&Regex>,
+) {
+    let Some(thread_id) = thread_id else {
+        return;
+    };
+    let matched = match regex {
+        Some(regex) => regex.is_match(text),
+        None => text.contains(pattern),
+    };
+    if matched {
+        matches.push(GrepMatch {
+            thread_id: thread_id.to_string(),
+            turn_id: turn_id.to_string(),
+            kind: kind.to_string(),
+            text: text.to_string(),
+        });
+    }
+}
+
+struct FastGrepFileState {
+    thread_id: Option<String>,
+    current_turn_id: Option<String>,
+    implicit_turn_prefix: String,
+    implicit_turn_counter: usize,
+}
+
+impl FastGrepFileState {
+    fn new(path: &Path) -> Self {
+        Self {
+            thread_id: None,
+            current_turn_id: None,
+            implicit_turn_prefix: fast_implicit_turn_prefix(path),
+            implicit_turn_counter: 0,
+        }
+    }
+
+    fn next_implicit_turn_id(&mut self) -> String {
+        self.implicit_turn_counter += 1;
+        format!(
+            "{}{}",
+            self.implicit_turn_prefix, self.implicit_turn_counter
+        )
+    }
+
+    fn resolve_turn_id(&self, explicit: Option<&str>) -> Option<String> {
+        explicit
+            .map(str::to_string)
+            .or_else(|| self.current_turn_id.clone())
+    }
+}
+
+fn fast_top_level_timestamp(value: &Value) -> Option<DateTime<Utc>> {
+    value
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .and_then(|timestamp| DateTime::parse_from_rfc3339(timestamp).ok())
+        .map(|timestamp| timestamp.with_timezone(&Utc))
+}
+
+fn fast_source_kind_from_value(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) => Some(value.clone()),
+        Value::Object(object) => object.keys().next().cloned(),
+        _ => None,
+    }
+}
+
+fn fast_implicit_turn_prefix(path: &Path) -> String {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    path.hash(&mut hasher);
+    format!("implicit:{}:", hasher.finish())
+}
+
+fn fast_extract_response_text(value: Option<&Value>) -> Option<String> {
+    let value = value?;
+    match value {
+        Value::String(text) if !text.is_empty() => Some(text.clone()),
+        Value::Array(parts) => {
+            let texts: Vec<_> = parts
+                .iter()
+                .filter_map(fast_extract_response_part_text)
+                .collect();
+            if texts.is_empty() {
+                None
+            } else {
+                Some(texts.join("\n\n"))
+            }
+        }
+        Value::Object(_) => fast_extract_response_part_text(value),
+        _ => None,
+    }
+}
+
+fn fast_extract_response_part_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) if !text.is_empty() => Some(text.clone()),
+        Value::Object(object) => object
+            .get("text")
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+            .or_else(|| fast_extract_response_text(object.get("content")))
+            .or_else(|| fast_extract_response_text(object.get("summary"))),
+        _ => None,
     }
 }
 
@@ -410,7 +940,11 @@ fn turn_sort_key(turn: &Turn) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>, 
     (turn.started_at, turn.completed_at, turn.turn_id.as_str())
 }
 
-fn item_texts(item: &Item) -> Vec<String> {
+fn item_texts(item: &Item, scope: SearchScope) -> Vec<String> {
+    if !scope.includes_item(item) {
+        return Vec::new();
+    }
+
     match item {
         Item::UserMessage(message) | Item::AgentMessage(message) => {
             message.text.clone().into_iter().collect()
@@ -492,6 +1026,7 @@ mod tests {
     use std::sync::{Mutex, OnceLock};
 
     use super::*;
+    use crate::search_scope::SearchScope;
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -552,12 +1087,21 @@ mod tests {
         env::set_var("CODEX_HISTORY_HOME", fixture_root("sample_root"));
         let backend = LocalBackend::discover();
 
-        let matches = backend.grep("cargo test", false).expect("grep");
+        let matches = backend
+            .grep("leftover argv", false, SearchScope::default())
+            .expect("grep");
         assert!(!matches.is_empty());
-        assert!(matches
-            .iter()
-            .any(|entry| entry.kind == "command_execution"));
-        let shell_matches = backend.grep("help ok", false).expect("grep shell output");
+        assert!(matches.iter().any(|entry| entry.kind == "agent_message"));
+        let shell_matches = backend
+            .grep(
+                "help ok",
+                false,
+                SearchScope {
+                    include_thinking: false,
+                    include_tools: true,
+                },
+            )
+            .expect("grep shell output");
         assert!(shell_matches
             .iter()
             .any(|entry| entry.thread_id == "thr_simple" && entry.kind == "command_execution"));
@@ -601,7 +1145,16 @@ mod tests {
                     && command.output.as_deref() == Some("tests ok")
         )));
 
-        let grep_matches = backend.grep("tests ok", false).expect("grep output");
+        let grep_matches = backend
+            .grep(
+                "tests ok",
+                false,
+                SearchScope {
+                    include_thinking: false,
+                    include_tools: true,
+                },
+            )
+            .expect("grep output");
         assert!(grep_matches.iter().any(|entry| {
             entry.thread_id == "thr_cross_shard"
                 && entry.turn_id == "turn_cross_shard_1"

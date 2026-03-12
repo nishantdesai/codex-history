@@ -359,7 +359,7 @@ fn attach_session_meta_event(value: Value, state: &mut ParseState) -> bool {
 
     state.thread = Some(ThreadSummary {
         thread_id: raw.payload.id,
-        name: None,
+        name: raw.payload.name,
         preview: None,
         created_at: raw.payload.timestamp,
         updated_at: raw.timestamp.or(Some(raw.payload.timestamp)),
@@ -892,6 +892,8 @@ struct RawEnvelope<T> {
 struct RawSessionMeta {
     id: String,
     timestamp: DateTime<Utc>,
+    #[serde(default, alias = "title")]
+    name: Option<String>,
     #[serde(default)]
     cwd: Option<PathBuf>,
     #[serde(default)]
@@ -965,12 +967,22 @@ impl RawTurnEvent {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
 
     fn fixture(path: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path)
+    }
+
+    fn temp_file_path(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        std::env::temp_dir().join(format!("codex-history-parser-{label}-{nanos}.jsonl"))
     }
 
     #[test]
@@ -1093,5 +1105,25 @@ mod tests {
                 if summary.text.as_deref()
                     == Some("Planning parser follow-up")
         ));
+    }
+
+    #[test]
+    fn parses_session_meta_name_when_present() {
+        let path = temp_file_path("session-meta-name");
+        fs::write(
+            &path,
+            concat!(
+                "{\"timestamp\":\"2026-03-11T09:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"thr_named\",\"title\":\"Named Thread\",\"timestamp\":\"2026-03-11T09:00:00Z\",\"cwd\":\"/workspace/named\",\"originator\":\"codex_cli_rs\",\"source\":\"fixture\",\"model_provider\":\"openai\"}}\n",
+                "{\"timestamp\":\"2026-03-11T09:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"turn_id\":\"turn_1\",\"message\":\"hello\"}}\n"
+            ),
+        )
+        .expect("write temp fixture");
+
+        let parsed = parse_session_log(&path).expect("read fixture");
+        let detail = parsed.detail.expect("parsed thread");
+        assert_eq!(detail.summary.thread_id, "thr_named");
+        assert_eq!(detail.summary.name.as_deref(), Some("Named Thread"));
+
+        fs::remove_file(path).expect("cleanup temp fixture");
     }
 }

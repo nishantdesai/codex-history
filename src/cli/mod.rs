@@ -1,16 +1,26 @@
+use std::collections::HashMap;
+
+use regex::Regex;
 use serde::Serialize;
 
-use crate::backend::local::{GrepMatch, LocalBackend, LocalDoctorReport};
+use crate::backend::local::{
+    load_session_index_names, GrepMatch, GrepReport, LocalBackend, LocalDoctorReport,
+};
 use crate::index::ingest::{
     build_local_index, load_manifest_snapshot, refresh_local_index, IndexBuildReport,
     IndexRefreshReport,
 };
 use crate::index::manifest::default_index_path;
-use crate::index::query::{search_index, search_with_fresh_overlay, SearchResult};
+use crate::index::query::{
+    load_index_thread_info, search_index, search_with_fresh_overlay, IndexedThreadInfo,
+    SearchResult,
+};
 use crate::index::schema::{doctor as doctor_index, IndexDoctorReport};
 use crate::model::{
     render_thread_export, ExportDocument, ExportFormat, Item, ThreadDetail, ThreadSummary,
 };
+use crate::redact::{redact_human_text, to_redacted_json_string};
+use crate::search_scope::SearchScope;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
@@ -57,10 +67,14 @@ pub enum Commands {
     Search {
         query: String,
         fresh: bool,
+        include_thinking: bool,
+        include_tools: bool,
     },
     Grep {
         pattern: String,
         regex: bool,
+        include_thinking: bool,
+        include_tools: bool,
     },
     Export {
         thread_id: String,
@@ -178,22 +192,55 @@ impl Cli {
                 })
             }
             Commands::Search { .. } => {
-                let Commands::Search { query, fresh } = &self.command else {
+                let Commands::Search {
+                    query,
+                    fresh,
+                    include_thinking,
+                    include_tools,
+                } = &self.command
+                else {
                     unreachable!("matched command variant");
                 };
+                let scope = SearchScope {
+                    include_thinking: *include_thinking,
+                    include_tools: *include_tools,
+                };
                 let path = default_index_path();
-                let results = if *fresh {
+                let (results, thread_info) = if *fresh {
                     let manifest = load_manifest_snapshot(&path)?;
                     let details = backend.list_thread_details()?;
-                    search_with_fresh_overlay(&path, query, 50, &details, &manifest)?
+                    let results =
+                        search_with_fresh_overlay(&path, query, 50, scope, &details, &manifest)?;
+                    let info = thread_display_info_from_details(&details);
+                    (results, info)
                 } else {
-                    search_index(&path, query, 50)?
+                    let results = search_index(&path, query, 50, scope)?;
+                    let ids = unique_thread_ids_from_search_results(&results);
+                    let info = thread_display_info_from_index(&path, &ids)?;
+                    (results, info)
                 };
-                render_collection(&self.global, &results, render_search_result)
+                if self.global.json || self.global.ndjson {
+                    render_collection(&self.global, &results, render_search_result)
+                } else {
+                    render_search_results_human(&results, query, &thread_info)
+                }
             }
-            Commands::Grep { pattern, regex } => {
-                let matches = backend.grep(pattern, *regex)?;
-                render_collection(&self.global, &matches, render_grep_match)
+            Commands::Grep {
+                pattern,
+                regex,
+                include_thinking,
+                include_tools,
+            } => {
+                let scope = SearchScope {
+                    include_thinking: *include_thinking,
+                    include_tools: *include_tools,
+                };
+                let report = backend.grep_report(pattern, *regex, scope)?;
+                if self.global.json || self.global.ndjson {
+                    render_collection(&self.global, &report.matches, render_grep_match)
+                } else {
+                    render_grep_matches_human(&report, pattern, *regex)
+                }
             }
             Commands::Export { thread_id, format } => {
                 let detail = backend
@@ -328,6 +375,8 @@ fn parse_search(args: &[String]) -> Result<ParsedCommandOutcome, String> {
 
     let mut query = None;
     let mut fresh = false;
+    let mut include_thinking = false;
+    let mut include_tools = false;
     let mut end_of_options = false;
 
     for (index, arg) in args[1..].iter().enumerate() {
@@ -341,6 +390,10 @@ fn parse_search(args: &[String]) -> Result<ParsedCommandOutcome, String> {
 
         match arg.as_str() {
             "--fresh" => fresh = set_flag(fresh, "--fresh")?,
+            "--include-thinking" => {
+                include_thinking = set_flag(include_thinking, "--include-thinking")?
+            }
+            "--include-tools" => include_tools = set_flag(include_tools, "--include-tools")?,
             "--" => end_of_options = true,
             arg if arg.starts_with('-') && query.is_none() && index + 2 == args.len() => {
                 query = Some(arg.to_string())
@@ -355,6 +408,8 @@ fn parse_search(args: &[String]) -> Result<ParsedCommandOutcome, String> {
         command: Commands::Search {
             query: query.ok_or_else(|| "missing required argument: search <query>".to_string())?,
             fresh,
+            include_thinking,
+            include_tools,
         },
         consumed: args.len(),
     }))
@@ -367,6 +422,8 @@ fn parse_grep(args: &[String]) -> Result<ParsedCommandOutcome, String> {
 
     let mut pattern = None;
     let mut regex = false;
+    let mut include_thinking = false;
+    let mut include_tools = false;
     let mut end_of_options = false;
 
     for (index, arg) in args[1..].iter().enumerate() {
@@ -380,6 +437,10 @@ fn parse_grep(args: &[String]) -> Result<ParsedCommandOutcome, String> {
 
         match arg.as_str() {
             "--regex" => regex = set_flag(regex, "--regex")?,
+            "--include-thinking" => {
+                include_thinking = set_flag(include_thinking, "--include-thinking")?
+            }
+            "--include-tools" => include_tools = set_flag(include_tools, "--include-tools")?,
             "--" => end_of_options = true,
             arg if arg.starts_with('-') && pattern.is_none() && index + 2 == args.len() => {
                 pattern = Some(arg.to_string())
@@ -395,6 +456,8 @@ fn parse_grep(args: &[String]) -> Result<ParsedCommandOutcome, String> {
             pattern: pattern
                 .ok_or_else(|| "missing required argument: grep <pattern>".to_string())?,
             regex,
+            include_thinking,
+            include_tools,
         },
         consumed: args.len(),
     }))
@@ -590,12 +653,12 @@ fn show_help() -> String {
 }
 
 fn search_help() -> String {
-    "codex-history search\nSearch across history\n\nUSAGE:\n  codex-history [OPTIONS] search [--fresh] <query>\n\nOPTIONS:\n  --fresh\n  -h, --help"
+    "codex-history search\nSearch across history\n\nUSAGE:\n  codex-history [OPTIONS] search [--fresh] [--include-thinking] [--include-tools] <query>\n\nOPTIONS:\n  --fresh\n  --include-thinking\n  --include-tools\n  -h, --help"
         .to_string()
 }
 
 fn grep_help() -> String {
-    "codex-history grep\nLiteral or regex transcript search without ranking\n\nUSAGE:\n  codex-history [OPTIONS] grep [--regex] <pattern>\n\nOPTIONS:\n  --regex\n  -h, --help"
+    "codex-history grep\nLiteral or regex transcript search without ranking\n\nUSAGE:\n  codex-history [OPTIONS] grep [--regex] [--include-thinking] [--include-tools] <pattern>\n\nOPTIONS:\n  --regex\n  --include-thinking\n  --include-tools\n  -h, --help"
         .to_string()
 }
 
@@ -644,7 +707,7 @@ where
         print_ndjson(values)
     } else {
         for value in values {
-            println!("{}", render_human(value));
+            println!("{}", redact_human_text(&render_human(value)));
         }
         Ok(())
     }
@@ -660,7 +723,7 @@ where
     } else if global.ndjson {
         print_json_line(value)
     } else {
-        println!("{}", render_human(value));
+        println!("{}", redact_human_text(&render_human(value)));
         Ok(())
     }
 }
@@ -669,8 +732,7 @@ fn print_json<T>(value: &T) -> Result<(), String>
 where
     T: Serialize + ?Sized,
 {
-    let text = serde_json::to_string_pretty(value)
-        .map_err(|error| format!("failed to serialize JSON output: {error}"))?;
+    let text = to_redacted_json_string(value, true)?;
     println!("{text}");
     Ok(())
 }
@@ -679,8 +741,7 @@ fn print_json_line<T>(value: &T) -> Result<(), String>
 where
     T: Serialize + ?Sized,
 {
-    let text = serde_json::to_string(value)
-        .map_err(|error| format!("failed to serialize output: {error}"))?;
+    let text = to_redacted_json_string(value, false)?;
     println!("{text}");
     Ok(())
 }
@@ -705,12 +766,8 @@ fn render_export(
             let document = ExportDocument::new(format, detail.clone());
             if global.ndjson {
                 print_json_line(&document)
-            } else if global.json {
-                print_json(&document)
             } else {
-                let rendered = render_thread_export(format, detail)?;
-                println!("{rendered}");
-                Ok(())
+                print_json(&document)
             }
         }
         ExportFormat::Markdown | ExportFormat::PromptPack => {
@@ -722,7 +779,7 @@ fn render_export(
             }
 
             let rendered = render_thread_export(format, detail)?;
-            println!("{rendered}");
+            println!("{}", redact_human_text(&rendered));
             Ok(())
         }
     }
@@ -802,6 +859,23 @@ fn render_grep_match(entry: &GrepMatch) -> String {
     )
 }
 
+fn render_grep_matches_human(
+    report: &GrepReport,
+    pattern: &str,
+    regex: bool,
+) -> Result<(), String> {
+    let groups = group_grep_entries(&report.matches, pattern, regex)?;
+    let threads = thread_display_info_from_summaries(&report.thread_summaries);
+
+    for (index, group) in groups.iter().enumerate() {
+        if index > 0 {
+            println!();
+        }
+        print_thread_group(index + 1, group, &threads, None);
+    }
+    Ok(())
+}
+
 fn render_doctor_report(report: &LocalDoctorReport) -> String {
     let mut lines = vec![
         format!("roots: {}", report.roots.len()),
@@ -833,6 +907,349 @@ fn render_search_result(entry: &SearchResult) -> String {
         "{}\t{}\t{}\t{:.2}\t{}",
         entry.thread_id, turn, entry.kind, entry.score, entry.text
     )
+}
+
+fn render_search_results_human(
+    entries: &[SearchResult],
+    query: &str,
+    threads: &HashMap<String, ThreadDisplayInfo>,
+) -> Result<(), String> {
+    let groups = group_search_entries(entries, query);
+
+    for (index, group) in groups.iter().enumerate() {
+        if index > 0 {
+            println!();
+        }
+        print_thread_group(index + 1, group, threads, Some(group.best_score));
+    }
+    Ok(())
+}
+
+fn human_kind_label(kind: &str) -> &str {
+    match kind {
+        "user_message" => "user",
+        "agent_message" => "assistant",
+        "command_execution" => "command",
+        "file_change" => "file",
+        "reasoning_summary" => "reasoning",
+        "thread_name" => "thread name",
+        "thread_preview" => "thread preview",
+        other => other,
+    }
+}
+
+fn compact_preview(text: &str) -> String {
+    const MAX_CHARS: usize = 160;
+
+    let compact = text
+        .split_whitespace()
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let mut preview = String::new();
+    for (index, ch) in compact.chars().enumerate() {
+        if index >= MAX_CHARS {
+            preview.push_str("...");
+            return preview;
+        }
+        preview.push(ch);
+    }
+
+    preview
+}
+
+fn thread_display_info_from_summaries(
+    threads: &HashMap<String, ThreadSummary>,
+) -> HashMap<String, ThreadDisplayInfo> {
+    threads
+        .iter()
+        .map(|(thread_id, summary)| {
+            (
+                thread_id.clone(),
+                ThreadDisplayInfo {
+                    name: summary.name.clone(),
+                    preview: summary.preview.clone(),
+                    cwd: summary.cwd.as_ref().map(|path| path.display().to_string()),
+                },
+            )
+        })
+        .collect()
+}
+
+fn thread_display_info_from_details(
+    details: &[ThreadDetail],
+) -> HashMap<String, ThreadDisplayInfo> {
+    details
+        .iter()
+        .map(|detail| {
+            (
+                detail.summary.thread_id.clone(),
+                ThreadDisplayInfo {
+                    name: detail.summary.name.clone(),
+                    preview: detail.summary.preview.clone(),
+                    cwd: detail
+                        .summary
+                        .cwd
+                        .as_ref()
+                        .map(|path| path.display().to_string()),
+                },
+            )
+        })
+        .collect()
+}
+
+fn unique_thread_ids_from_search_results(entries: &[SearchResult]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut ids = Vec::new();
+    for entry in entries {
+        if seen.insert(entry.thread_id.clone()) {
+            ids.push(entry.thread_id.clone());
+        }
+    }
+    ids
+}
+
+fn thread_display_info_from_index(
+    path: &std::path::Path,
+    thread_ids: &[String],
+) -> Result<HashMap<String, ThreadDisplayInfo>, String> {
+    let indexed = load_index_thread_info(path, thread_ids)?;
+    let session_names = load_session_index_names().unwrap_or_default();
+    let mut info = HashMap::new();
+
+    for thread_id in thread_ids {
+        let indexed_info = indexed.get(thread_id);
+        let mut display = indexed_info
+            .map(thread_display_info_from_indexed)
+            .unwrap_or_default();
+        if display.name.is_none() {
+            display.name = session_names.get(thread_id).cloned();
+        }
+        info.insert(thread_id.clone(), display);
+    }
+
+    Ok(info)
+}
+
+fn thread_display_info_from_indexed(info: &IndexedThreadInfo) -> ThreadDisplayInfo {
+    ThreadDisplayInfo {
+        name: info.name.clone(),
+        preview: info.preview.clone(),
+        cwd: info.cwd.clone(),
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct ThreadDisplayInfo {
+    name: Option<String>,
+    preview: Option<String>,
+    cwd: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ThreadResultGroup {
+    thread_id: String,
+    hits: usize,
+    occurrences: usize,
+    kinds: Vec<String>,
+    preview: String,
+    best_score: f64,
+}
+
+fn group_grep_entries(
+    entries: &[GrepMatch],
+    pattern: &str,
+    regex: bool,
+) -> Result<Vec<ThreadResultGroup>, String> {
+    let matcher = if regex {
+        Some(Regex::new(pattern).map_err(|error| format!("invalid regex `{pattern}`: {error}"))?)
+    } else {
+        None
+    };
+    let terms = query_terms(pattern);
+    let mut groups = Vec::new();
+    let mut positions = HashMap::new();
+
+    for entry in entries {
+        let position = if let Some(position) = positions.get(&entry.thread_id).copied() {
+            position
+        } else {
+            let position = groups.len();
+            positions.insert(entry.thread_id.clone(), position);
+            groups.push(ThreadResultGroup {
+                thread_id: entry.thread_id.clone(),
+                hits: 0,
+                occurrences: 0,
+                kinds: Vec::new(),
+                preview: compact_preview(&entry.text),
+                best_score: 0.0,
+            });
+            position
+        };
+
+        let group = &mut groups[position];
+        group.hits += 1;
+        group.occurrences += grep_occurrences(&entry.text, pattern, matcher.as_ref(), &terms);
+        push_unique_kind(&mut group.kinds, &entry.kind);
+    }
+
+    Ok(groups)
+}
+
+fn group_search_entries(entries: &[SearchResult], query: &str) -> Vec<ThreadResultGroup> {
+    let terms = query_terms(query);
+    let mut groups = Vec::new();
+    let mut positions = HashMap::new();
+
+    for entry in entries {
+        let position = if let Some(position) = positions.get(&entry.thread_id).copied() {
+            position
+        } else {
+            let position = groups.len();
+            positions.insert(entry.thread_id.clone(), position);
+            groups.push(ThreadResultGroup {
+                thread_id: entry.thread_id.clone(),
+                hits: 0,
+                occurrences: 0,
+                kinds: Vec::new(),
+                preview: compact_preview(&entry.text),
+                best_score: entry.score,
+            });
+            position
+        };
+
+        let group = &mut groups[position];
+        group.hits += 1;
+        group.occurrences += text_term_occurrences(&entry.text, &terms, query);
+        if entry.score > group.best_score {
+            group.best_score = entry.score;
+            group.preview = compact_preview(&entry.text);
+        }
+        push_unique_kind(&mut group.kinds, &entry.kind);
+    }
+
+    groups
+}
+
+fn print_thread_group(
+    rank: usize,
+    group: &ThreadResultGroup,
+    threads: &HashMap<String, ThreadDisplayInfo>,
+    best_score: Option<f64>,
+) {
+    println!(
+        "{}. thread_id: {}",
+        rank,
+        redact_human_text(&group.thread_id)
+    );
+    if let Some(summary) = threads.get(&group.thread_id) {
+        if let Some(name) = summary
+            .name
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+        {
+            println!("   name: {}", redact_human_text(name));
+        } else if let Some(prompt) = summary
+            .preview
+            .as_deref()
+            .filter(|prompt| !prompt.trim().is_empty())
+        {
+            println!(
+                "   first prompt: {}",
+                redact_human_text(&compact_preview(prompt))
+            );
+        }
+        if let Some(cwd) = &summary.cwd {
+            println!("   cwd: {}", redact_human_text(cwd));
+        }
+    }
+    println!("   hits: {}", group.hits);
+    println!("   occurrences: {}", group.occurrences);
+    println!(
+        "   matched in: {}",
+        redact_human_text(
+            &group
+                .kinds
+                .iter()
+                .map(|kind| human_kind_label(kind).to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    );
+    if let Some(score) = best_score {
+        println!("   best score: {:.2}", score);
+    }
+    println!("   preview: {}", redact_human_text(&group.preview));
+}
+
+fn push_unique_kind(kinds: &mut Vec<String>, kind: &str) {
+    if kinds.iter().any(|existing| existing == kind) {
+        return;
+    }
+    kinds.push(kind.to_string());
+}
+
+fn grep_occurrences(text: &str, pattern: &str, regex: Option<&Regex>, terms: &[String]) -> usize {
+    if let Some(regex) = regex {
+        let count = regex.find_iter(text).count();
+        return count.max(1);
+    }
+
+    text_term_occurrences(text, terms, pattern)
+}
+
+fn text_term_occurrences(text: &str, terms: &[String], fallback: &str) -> usize {
+    if !terms.is_empty() {
+        let tokens = query_terms(text);
+        let count = tokens
+            .iter()
+            .filter(|token| terms.iter().any(|term| term == *token))
+            .count();
+        if count > 0 {
+            return count;
+        }
+    }
+
+    count_substring_case_insensitive(text, fallback).max(1)
+}
+
+fn count_substring_case_insensitive(text: &str, needle: &str) -> usize {
+    let needle = needle.trim();
+    if needle.is_empty() {
+        return 0;
+    }
+
+    let text = text.to_ascii_lowercase();
+    let needle = needle.to_ascii_lowercase();
+    let mut count = 0;
+    let mut offset = 0;
+
+    while let Some(index) = text[offset..].find(&needle) {
+        count += 1;
+        offset += index + needle.len();
+    }
+
+    count
+}
+
+fn query_terms(query: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+
+    for ch in query.chars() {
+        if ch.is_alphanumeric() {
+            current.extend(ch.to_lowercase());
+        } else if !current.is_empty() {
+            tokens.push(std::mem::take(&mut current));
+        }
+    }
+
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    tokens
 }
 
 fn render_index_build_report(report: &IndexBuildReport) -> String {
@@ -981,7 +1398,9 @@ mod tests {
             cli.command,
             Commands::Search {
                 query: "sqlite".into(),
-                fresh: true
+                fresh: true,
+                include_thinking: false,
+                include_tools: false,
             }
         );
 
@@ -994,7 +1413,51 @@ mod tests {
             cli.command,
             Commands::Grep {
                 pattern: "fatal.*".into(),
-                regex: true
+                regex: true,
+                include_thinking: false,
+                include_tools: false,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_search_and_grep_scope_flags() {
+        let parsed = Cli::parse(vec![
+            "search".into(),
+            "--include-thinking".into(),
+            "--include-tools".into(),
+            "sqlite".into(),
+        ])
+        .expect("parse success");
+        let ParseOutcome::Run(cli) = parsed else {
+            panic!("expected run");
+        };
+        assert_eq!(
+            cli.command,
+            Commands::Search {
+                query: "sqlite".into(),
+                fresh: false,
+                include_thinking: true,
+                include_tools: true,
+            }
+        );
+
+        let parsed = Cli::parse(vec![
+            "grep".into(),
+            "--include-tools".into(),
+            "build".into(),
+        ])
+        .expect("parse success");
+        let ParseOutcome::Run(cli) = parsed else {
+            panic!("expected run");
+        };
+        assert_eq!(
+            cli.command,
+            Commands::Grep {
+                pattern: "build".into(),
+                regex: false,
+                include_thinking: false,
+                include_tools: true,
             }
         );
     }
@@ -1009,7 +1472,9 @@ mod tests {
             cli.command,
             Commands::Search {
                 query: "--helpful".into(),
-                fresh: false
+                fresh: false,
+                include_thinking: false,
+                include_tools: false,
             }
         );
 
@@ -1022,7 +1487,9 @@ mod tests {
             cli.command,
             Commands::Grep {
                 pattern: "-foo.*".into(),
-                regex: true
+                regex: true,
+                include_thinking: false,
+                include_tools: false,
             }
         );
     }
@@ -1043,7 +1510,9 @@ mod tests {
             cli.command,
             Commands::Search {
                 query: "--help".into(),
-                fresh: true
+                fresh: true,
+                include_thinking: false,
+                include_tools: false,
             }
         );
 
@@ -1061,7 +1530,9 @@ mod tests {
             cli.command,
             Commands::Grep {
                 pattern: "--starts-with-dash".into(),
-                regex: true
+                regex: true,
+                include_thinking: false,
+                include_tools: false,
             }
         );
     }

@@ -5,7 +5,10 @@ fn main() -> ExitCode {
         Ok(codex_history::cli::ParseOutcome::Run(cli)) => match cli.run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(message) => {
-                eprintln!("error: {message}");
+                eprintln!(
+                    "error: {}",
+                    codex_history::redact::redact_error_text(&message)
+                );
                 ExitCode::from(1)
             }
         },
@@ -14,7 +17,10 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(message) => {
-            eprintln!("error: {message}");
+            eprintln!(
+                "error: {}",
+                codex_history::redact::redact_error_text(&message)
+            );
             eprintln!("Run `codex-history --help` for usage.");
             ExitCode::from(2)
         }
